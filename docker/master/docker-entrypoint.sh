@@ -7,13 +7,14 @@ set -e
 
 if [ "$1" = 'freeswitch' ]; then
 
-    if [ ! -f "/etc/freeswitch/freeswitch.xml" ]; then
-        mkdir -p /etc/freeswitch
-        cp -varf /usr/share/freeswitch/conf/vanilla/* /etc/freeswitch/
+    if [ ! -f "/usr/local/freeswitch/conf/freeswitch.xml" ]; then
+        #mkdir -p /usr/local/freeswitch/conf
+        #cp -varf /usr/share/freeswitch/conf/vanilla/* /usr/local/freeswitch/conf/
+        echo "/usr/local/freeswitch/conf/freeswitch.xml no exist"
     fi
 
-    chown -R freeswitch:freeswitch /etc/freeswitch
-    chown -R freeswitch:freeswitch /var/{run,lib}/freeswitch
+    #chown -R freeswitch:freeswitch /usr/local/freeswitch/conf
+    #chown -R freeswitch:freeswitch /core_dumps
     
     if [ -d /docker-entrypoint.d ]; then
         for f in /docker-entrypoint.d/*.sh; do
@@ -21,7 +22,8 @@ if [ "$1" = 'freeswitch' ]; then
         done
     fi
     
-    exec gosu freeswitch /usr/bin/freeswitch -u freeswitch -g freeswitch -nonat -c
+    exec  /usr/local/freeswitch/bin/freeswitch  -nonat -c
 fi
 
 exec "$@"
+

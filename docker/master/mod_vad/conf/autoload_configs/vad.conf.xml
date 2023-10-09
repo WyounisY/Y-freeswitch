@@ -1,0 +1,11 @@
+<configuration name="vad.conf" description="mod_vad Configuration">
+  <settings>
+    <param name="mode" value="0"/>
+    <param name="no_sound_timeout" value="10"/>
+    <param name="stop_talk_to_recognition_time" value="100"/>
+    <param name="sync" value="1"/>
+    <!--<param name="nlp_type" value="vicuna"/>-->
+    <!--<param name="nlp_type" value="gpt"/>-->
+    <!--<param name="nlp_type" value="botpress"/>-->
+  </settings>
+</configuration>
