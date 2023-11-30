@@ -74,6 +74,9 @@ RUN cd /usr/src/freeswitch \
     && make install 
 
 RUN sed -i '10i<load module="mod_vad"/>' /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml
+RUN sed -i 's/<param name="listen-ip" value="::"\/>/<param name="listen-ip" value="0.0.0.0"\/>/' /usr/local/freeswitch/conf/autoload_configs/event_socket.conf.xml 
+RUN ln -sf /usr/local/freeswitch/bin/freeswitch /usr/bin/ 
+RUN ln -sf /usr/local/freeswitch/bin/fs_cli /usr/bin/
 COPY mod_vad/conf/autoload_configs/vad.conf.xml /usr/local/freeswitch/conf/autoload_configs
 
 # Add anything else here
