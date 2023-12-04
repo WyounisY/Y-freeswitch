@@ -49,7 +49,7 @@ RUN cd /usr/src/ \
 
 #copy mod_vad
 COPY ["mod_vad","/usr/src/freeswitch/src/mod/applications/mod_vad"]
-
+#COPY ["/home/work/wangyuan/freeswitch/Y-freeswitch/src/switch_core_session.c""/usr/src/freeswitch/src/switch_core_session.c"]
 RUN cd /usr/src/
 RUN git clone https://github.com/dpirch/libfvad.git \
     && cd libfvad \
