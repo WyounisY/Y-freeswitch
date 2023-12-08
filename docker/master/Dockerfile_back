@@ -1,5 +1,6 @@
 #非直接启动freeswitch的dockerfile，进入容器之后再启动
-FROM debian:bullseye
+#系统内核与docker系统不兼容时将bullseye切换为buster
+FROM debian:buster
 MAINTAINER Andrey Volk <andrey@signalwire.com>
 
 RUN sed -i 's/http:\/\/deb.debian.org/http:\/\/mirrors.aliyun.com/g' /etc/apt/sources.list
@@ -7,7 +8,11 @@ RUN sed -i 's/http:\/\/deb.debian.org/http:\/\/mirrors.aliyun.com/g' /etc/apt/so
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -yq install git
 
-RUN git clone https://github.com/signalwire/freeswitch /usr/src/freeswitch
+RUN cd /usr/src/ \
+    && git clone https://github.com/signalwire/freeswitch.git -bv1.10.10 freeswitch \
+    && cd freeswitch \
+    && git config pull.rebase true
+RUN cd /usr/src/
 RUN git clone https://github.com/signalwire/libks /usr/src/libs/libks
 RUN git clone https://github.com/freeswitch/sofia-sip /usr/src/libs/sofia-sip
 RUN git clone https://github.com/freeswitch/spandsp /usr/src/libs/spandsp
@@ -37,7 +42,9 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get -yq install \
 # mod_sndfile
     libsndfile1-dev libflac-dev libogg-dev libvorbis-dev \
 # mod_shout
-    libshout3-dev libmpg123-dev libmp3lame-dev
+    libshout3-dev libmpg123-dev libmp3lame-dev \
+#其他软件
+     vim sngrep htop
 
 RUN cd /usr/src/libs/libks && cmake . -DCMAKE_INSTALL_PREFIX=/usr -DWITH_LIBBACKTRACE=1 && make install
 RUN cd /usr/src/libs/sofia-sip && ./bootstrap.sh && ./configure CFLAGS="-g -ggdb" --with-pic --with-glib=no --without-doxygen --disable-stun --prefix=/usr && make -j`nproc --all` && make install
@@ -50,6 +57,19 @@ RUN sed -i 's|#formats/mod_shout|formats/mod_shout|' /usr/src/freeswitch/build/m
 RUN cd /usr/src/freeswitch && ./bootstrap.sh -j
 RUN cd /usr/src/freeswitch && ./configure
 RUN cd /usr/src/freeswitch && make -j`nproc` && make install
+
+RUN ln -sf /usr/local/freeswitch/bin/freeswitch /usr/bin/ 
+RUN ln -sf /usr/local/freeswitch/bin/fs_cli /usr/bin/
+
+#安装libfvad
+RUN cd /usr/src/
+RUN git clone https://github.com/dpirch/libfvad.git \
+    && cd libfvad \
+    && autoreconf -i \
+    && ./configure \
+    && make \
+    && make install \
+    && ldconfig
 
 # Cleanup the image
 #RUN apt-get clean

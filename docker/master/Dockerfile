@@ -49,7 +49,8 @@ RUN cd /usr/src/ \
 
 #copy mod_vad
 COPY ["mod_vad","/usr/src/freeswitch/src/mod/applications/mod_vad"]
-#COPY ["/home/work/wangyuan/freeswitch/Y-freeswitch/src/switch_core_session.c""/usr/src/freeswitch/src/switch_core_session.c"]
+#需要将文件放入docker 编译的时候 将文件放入dockerfile同一个目录下
+COPY ["./switch_core_session.c","/usr/src/freeswitch/src/switch_core_session.c"]
 RUN cd /usr/src/
 RUN git clone https://github.com/dpirch/libfvad.git \
     && cd libfvad \
