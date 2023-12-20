@@ -8,6 +8,7 @@ RUN sed -i 's/http:\/\/deb.debian.org/http:\/\/mirrors.aliyun.com/g' /etc/apt/so
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -yq install git
 
+#RUN git clone https://github.com/signalwire/freeswitch /usr/src/freeswitch
 RUN cd /usr/src/ \
     && git clone https://github.com/signalwire/freeswitch.git -bv1.10.10 freeswitch \
     && cd freeswitch \
@@ -44,7 +45,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get -yq install \
 # mod_shout
     libshout3-dev libmpg123-dev libmp3lame-dev \
 #其他软件
-     vim sngrep htop
+    vim sngrep htop
 
 RUN cd /usr/src/libs/libks && cmake . -DCMAKE_INSTALL_PREFIX=/usr -DWITH_LIBBACKTRACE=1 && make install
 RUN cd /usr/src/libs/sofia-sip && ./bootstrap.sh && ./configure CFLAGS="-g -ggdb" --with-pic --with-glib=no --without-doxygen --disable-stun --prefix=/usr && make -j`nproc --all` && make install
