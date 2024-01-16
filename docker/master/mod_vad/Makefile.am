@@ -12,3 +12,8 @@ mod_vad_la_CPPFLAGS = -I/usr/src/libfvad/include
 mod_vad_la_LIBADD   = $(switch_builddir)/libfreeswitch.la  -lfvad
 mod_vad_la_LDFLAGS  = -avoid-version -module -no-undefined -shared
 
+#1.10
+BASE=/usr/src/freeswitch/
+LOCAL_CFLAGS=-I/libfvad/include
+LOCAL_LDFLAGS=-L/usr/local/lib/ -lfvad 
+include $(BASE)/build/modmake.rules
