@@ -71,6 +71,27 @@ RUN git clone https://github.com/dpirch/libfvad.git \
     && make install \
     && ldconfig
 
+COPY mod_vad /usr/src/freeswitch/src/mod/applications/mod_vad
+COPY mod_uuid_playback /usr/src/freeswitch/src/mod/applications/mod_uuid_playback
+COPY mod_uuid_playback_continue /usr/src/freeswitch/src/mod/applications/mod_uuid_playback_continue
+COPY vad.conf.xml /usr/local/freeswitch/conf/autoload_configs
+COPY modules.conf.xml /usr/local/freeswitch/conf/autoload_configs
+
+RUN cd /usr/src/freeswitch/src/mod/applications/mod_vad \
+    && make \
+    && make install \
+    && cd /usr/src/freeswitch/src/mod/applications/mod_uuid_playback \
+    && make \
+    && make install \
+    && cd /usr/src/freeswitch/src/mod/applications/mod_uuid_playback_continue \
+    && make \
+    && make install \
+    && cd /usr/src/freeswitch/src/mod/applications/mod_callcenter \
+    && make \
+    && make install 
+
+
+
 # Cleanup the image
 #RUN apt-get clean
 
