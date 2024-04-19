@@ -410,7 +410,7 @@ static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, 
 				switch_sleep(20 * 1000);
 
 				while (switch_channel_media_ready(channel)) {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvAndPlayBackPthread phread while 2 %s!\n",vad->uuid);
+                    //switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvAndPlayBackPthread phread while 2 %s!\n",vad->uuid);
 					if (vad->cond_flag == FALSE) {
 						switch_mutex_lock(vad->mutex);
 
@@ -445,7 +445,18 @@ static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, 
 							break;
 						}
 					}else{
-                        switch_sleep(20 * 1000);
+						ret = recv(vad->cfd, readbuf, sizeof(readbuf), MSG_PEEK|MSG_DONTWAIT);
+						if (ret >0 ){
+							parse_json = vad_parse_Json(readbuf, vad);
+							if (0 == (strcmp(parse_json, "call_end"))){
+								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,"RecvAndPlayBackPthread: when user no sounds vad_parse_Json success call flag is call_end!!\n");
+								switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+								break;
+							}
+						}else{
+							switch_sleep(20 * 1000);
+						}
+                        
                     }
 				}
 			}
