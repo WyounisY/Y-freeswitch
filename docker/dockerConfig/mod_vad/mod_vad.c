@@ -705,9 +705,10 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 									  "send len is :%d everytime!!\n", ret);
 					vad->log_flag = FALSE;
 				} else if (ret == 0) {
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "socket disconnect :%d!!\n",
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "send frame data lenth is :%d!!\n",
 									  ret);
-					switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "no hangup\n");
+					//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 				}
 			}
 		} else if (vad->vad_state == SWITCH_VAD_STATE_NONE) {
