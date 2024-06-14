@@ -44,6 +44,7 @@ typedef struct {
 	char recv_path[128];
 	char call_flag[16];
 	switch_bool_t cond_flag;
+	switch_bool_t is_playback_end;
 	switch_bool_t log_flag;
 	struct timeval tv_talking, tv_stop_talking;
 	char *uuid;
@@ -68,6 +69,14 @@ static char *vad_serialize_json(switch_vad_docker_t *vad, int callstatus)
 	char *writebuf = NULL;
 	switch_channel_t *channel = switch_core_session_get_channel(vad->session);
 	const char *nlp_type = switch_channel_get_variable(channel, "nlp_type");
+	if (nlp_type == NULL) {
+		nlp_type = "huoli_model";
+		// 变量不存在
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "nlp_type变量不存在 !! : %s \n",nlp_type);
+	} else {
+		// 变量存在并且有值
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "nlp_type变量存在 !! : %s \n",nlp_type);
+	}
 	pJson = cJSON_CreateObject();
 	if (NULL == pJson) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "cJSON_CreateObject Failed !!\n");
@@ -90,9 +99,9 @@ static char *vad_serialize_json(switch_vad_docker_t *vad, int callstatus)
 	cJSON_AddStringToObject(pJson, "nlp_type", nlp_type);
 	cJSON_AddStringToObject(pJson, "audio_file_path", vad->AudioDir);
 	if (globals.isSync == 1) {
-		cJSON_AddStringToObject(pJson, "asr_type", "1");
+		cJSON_AddStringToObject(pJson, "asr_type", "stream");
 	} else if (globals.isSync == 2) {
-		cJSON_AddStringToObject(pJson, "asr_type", "2");
+		cJSON_AddStringToObject(pJson, "asr_type", "file");
 	}
 
 	writebuf = cJSON_PrintUnformatted(pJson);
@@ -251,6 +260,7 @@ static switch_bool_t switch_vad_docker_init(switch_vad_docker_t *vad)
 	vad->fileflag = 0;
 	vad->uuid = NULL;
 	vad->cond_flag = FALSE;
+	vad->is_playback_end = TRUE;
 	vad->log_flag = TRUE;
 	vad->callend_play = 0;
 	vad->pthread_exit = 0;
@@ -390,7 +400,10 @@ static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, 
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
 								  "RecvAndPlayBackPthread: vad_parse_Json success ---- soundfile path is %s\n",
 								  parse_json);
-
+				vad->is_playback_end = FALSE;
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+								  "RecvAndPlayBackPthread: 开始播放音频文件 is_playback_end标志是 %d\n",
+								  vad->is_playback_end);
 				status = switch_ivr_play_file(vad->session, NULL, vad->recv_path, NULL);
 				if (status != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
@@ -403,7 +416,7 @@ static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, 
 									  "RecvAndPlayBackPthread: channel not ready! \n");
 					break;
 				}
-
+				
 				vad->cond_flag = TRUE;
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
 								  "RecvAndPlayBackPthread: vad->cond_flag set true \n");
@@ -432,7 +445,10 @@ static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, 
 
 							switch_mutex_unlock(vad->mutex);
 							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, " -------- 子线程解锁 !!\n");
-
+							vad->is_playback_end = TRUE;
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+								  "RecvAndPlayBackPthread: 音频文件播放完毕 is_playback_end标志是 %d\n",
+								  vad->is_playback_end);
 							break;
 						} else {
 							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
@@ -605,6 +621,10 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 						  "Stopping VAD detection for audio stream\n");
 		break;
+	case SWITCH_ABC_TYPE_WRITE:
+	case SWITCH_ABC_TYPE_WRITE_REPLACE:
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,"读取用户的声音成功\n");
+		break;
 	case SWITCH_ABC_TYPE_READ:
 	case SWITCH_ABC_TYPE_READ_REPLACE:
 
@@ -694,7 +714,7 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 					switch_mutex_unlock(vad->mutex);
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "callback解锁了 \n");
 				}
-
+				if (vad->is_playback_end) {
 				ret = send(vad->cfd, linear_frame->data, linear_frame->datalen, 0);
 				if (ret < 0) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
@@ -710,6 +730,8 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "no hangup\n");
 					//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 				}
+				}
+				
 			}
 		} else if (vad->vad_state == SWITCH_VAD_STATE_NONE) {
 			if (vad->log_flag == TRUE) {
