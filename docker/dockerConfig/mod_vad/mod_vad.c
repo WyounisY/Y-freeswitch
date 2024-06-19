@@ -427,7 +427,7 @@ static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, 
 					if (vad->cond_flag == FALSE) {
 						switch_mutex_lock(vad->mutex);
 
-						ret = send(vad->cfd, sendbuf, 320, 0);
+						ret = send(vad->cfd, sendbuf, strlen(sendbuf), 0);
 						if (ret < 0) {
 							switch_log_printf(
 								SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
@@ -679,7 +679,7 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 				send(vad->cfd, serialize_json, strlen(serialize_json), 0);
 				close(vad->write_fd);
 			} else if (globals.isSync == 1) {
-				ret = send(vad->cfd, sendbuf, 320, 0);
+				ret = send(vad->cfd, sendbuf, strlen(sendbuf), 0);
 				if (ret <= 0) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 									  "when stop send socket data fail errno is :%s!!\n", strerror(errno));
