@@ -23,22 +23,15 @@ typedef struct {
 	int pthread_exit;
 	char recv_path[128];
 	char call_flag[16];
+	char *uuid;
 	switch_bool_t log_flag;
 	switch_bool_t cond_flag;
-	switch_bool_t is_playback_end;
-	char *uuid;
-
-	// DenoiseState *st;
 	switch_mutex_t *mutex;
 	switch_thread_t *thread;
 	switch_thread_cond_t *cond;
 } switch_vad_docker_t;
 
-static struct {
-	int mode;
-	int isSync;
-	int realTime;
-} globals;
+
 
 static char *vad_serialize_json(switch_vad_docker_t *vad, int callstatus)
 {
@@ -74,11 +67,7 @@ static char *vad_serialize_json(switch_vad_docker_t *vad, int callstatus)
 	}
 
 	cJSON_AddStringToObject(pJson, "nlp_type", nlp_type);
-	if (globals.isSync == 1) {
-		cJSON_AddStringToObject(pJson, "asr_type", "stream");
-	} else if (globals.isSync == 2) {
-		cJSON_AddStringToObject(pJson, "asr_type", "file");
-	}
+	cJSON_AddStringToObject(pJson, "asr_type", "stream");
 
 	writebuf = cJSON_PrintUnformatted(pJson);
 	if (NULL == writebuf) {
@@ -167,39 +156,6 @@ static int create_client(switch_vad_docker_t *g_vad)
 	return ret;
 }
 
-static int load_config(void)
-{
-	switch_xml_t cfg, xml, settings, param;
-
-	if (!(xml = switch_xml_open_cfg(VAD_XML_CONFIG, &cfg, NULL))) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to open XML configuration '%s'\n",
-						  VAD_XML_CONFIG);
-		return -1;
-	}
-
-	if ((settings = switch_xml_child(cfg, "settings"))) {
-		for (param = switch_xml_child(settings, "param"); param; param = param->next) {
-			char *var = (char *)switch_xml_attr_soft(param, "name");
-			char *val = (char *)switch_xml_attr_soft(param, "value");
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Found parameter %s=%s\n", var, val);
-			if (!strcasecmp(var, "mode")) {
-				globals.mode = atoi(val);
-			}  else if (!strcasecmp(var, "sync")) {
-				globals.isSync = atoi(val);
-			} else if (!strcasecmp(var, "realtime")) {
-				globals.realTime = atoi(val);
-			}
-			/*else if (!strcasecmp(var, "nlp_type"))
-			{
-				// globals.nlp_type = val;
-				switch_set_string(globals.nlp_type, val);
-			}*/
-		}
-	}
-
-	switch_xml_free(xml);
-	return 0;
-}
 
 static switch_bool_t switch_vad_docker_init(switch_vad_docker_t *vad)
 {
@@ -210,7 +166,7 @@ static switch_bool_t switch_vad_docker_init(switch_vad_docker_t *vad)
 	vad->log_flag = TRUE;
 	vad->uuid = NULL;
 	vad->cond_flag = FALSE;
-	vad->is_playback_end = TRUE;
+
 	vad->pthread_exit = 0;
 	memset(vad->recv_path, 0, 128);
 
@@ -249,28 +205,22 @@ static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, 
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
 								  "RecvAndPlayBackPthread: vad_parse_Json success call flag is call_end!!\n");
 
-					status = switch_ivr_play_file(vad->session, NULL, vad->recv_path, NULL);
-					if (status != SWITCH_STATUS_SUCCESS) {
-						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-										  "RecvAndPlayBackPthread: switch_ivr_play_file fail!!\n");
-						break;
-					}
-					// switch_assert(!(fh.flags & SWITCH_FILE_OPEN));
-					
-					switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-				
+				status = switch_ivr_play_file(vad->session, NULL, vad->recv_path, NULL);
+				if (status != SWITCH_STATUS_SUCCESS) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+									  "RecvAndPlayBackPthread: switch_ivr_play_file fail!!\n");
+					break;
+				}
+				// switch_assert(!(fh.flags & SWITCH_FILE_OPEN));
+
+				switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 
 				break;
 			} else if (0 == (strcmp(parse_json, "tts_end"))) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
 								  "RecvAndPlayBackPthread: vad_parse_Json success ---- soundfile path is %s\n",
 								  parse_json);
-				if (globals.realTime != 1) {
-					vad->is_playback_end = FALSE;
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-									  "RecvAndPlayBackPthread: 开始播放音频文件 is_playback_end标志是 %d\n",
-									  vad->is_playback_end);
-				}
+
 				status = switch_ivr_play_file(vad->session, NULL, vad->recv_path, NULL);
 				if (status != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
@@ -313,13 +263,6 @@ static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, 
 
 							switch_mutex_unlock(vad->mutex);
 							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, " -------- 子线程解锁 !!\n");
-
-							if (globals.realTime != 1) {
-								vad->is_playback_end = TRUE;
-								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-												  "RecvAndPlayBackPthread: 音频文件播放完毕 is_playback_end标志是 %d\n",
-												  vad->is_playback_end);
-							}
 
 							break;
 						} else {
@@ -422,9 +365,7 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 		}
 
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-						  "Starting VAD detection for audio stream ,mode "
-						  "is %d,  sync : %d\n",
-						  , globals.mode, globals.isSync);
+						  "Starting VAD detection for audio stream  ");
 
 		vad->pool = switch_core_session_get_pool(session);
 
@@ -438,16 +379,13 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 
 		break;
 	case SWITCH_ABC_TYPE_CLOSE:
-		
-		if (globals.isSync == 1) {
-			ret = send(vad->cfd, "call_end", strlen("call_end"), 0);
-			if (ret <= 0) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
-								  "when close send socket data fail errno is :%s!!\n", strerror(errno));
-			}
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "when close send len is :%d!!\n",
-							  ret);
+
+		ret = send(vad->cfd, "call_end", strlen("call_end"), 0);
+		if (ret <= 0) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+							  "when close send socket data fail errno is :%s!!\n", strerror(errno));
 		}
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "when close send len is :%d!!\n", ret);
 
 		// switch_thread_join(&st, vad->thread);
 		close(vad->write_fd);
@@ -486,28 +424,27 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 			switch_mutex_unlock(vad->mutex);
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "callback解锁了 \n");
 		}
-		if (vad->is_playback_end) {
-			ret = send(vad->cfd, linear_frame->data, linear_frame->datalen, 0);
-			if (ret < 0) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
-								  "when talking send socket data fail errno is :%s!!\n", strerror(errno));
-				switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-			} else if (ret > 0) {
-				if (vad->log_flag == TRUE) {
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-									  "send len is :%d everytime!!\n", ret);
-					vad->log_flag = FALSE;
-				}
 
-			} else if (ret == 0) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
-								  "send frame data lenth is :%d!!\n", ret);
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "no hangup\n");
-				// switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-			} else {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
-								  "发送语音流时发生未知错错误 %d\n", ret);
+		ret = send(vad->cfd, linear_frame->data, linear_frame->datalen, 0);
+		if (ret < 0) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+							  "when talking send socket data fail errno is :%s!!\n", strerror(errno));
+			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+		} else if (ret > 0) {
+			if (vad->log_flag == TRUE) {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "send len is :%d everytime!!\n",
+								  ret);
+				vad->log_flag = FALSE;
 			}
+
+		} else if (ret == 0) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "send frame data lenth is :%d!!\n",
+							  ret);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "no hangup\n");
+			// switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "发送语音流时发生未知错错误 %d\n",
+							  ret);
 		}
 
 		break;
@@ -522,11 +459,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_vad_load)
 {
 	switch_application_interface_t *app_interface;
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
-
-	if (load_config()) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, " load_config falil...\n");
-		return SWITCH_STATUS_UNLOAD;
-	}
 
 	SWITCH_ADD_APP(app_interface, "vad", "Voice activity detection", "Freeswitch's VAD", vad_start_function,
 				   "[start|stop]", SAF_NONE);
