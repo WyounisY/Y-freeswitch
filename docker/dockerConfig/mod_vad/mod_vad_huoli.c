@@ -615,13 +615,13 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 			vad->fvad = NULL;
 		}
 
-		
+		close(vad->cfd);
 		while(vad->pthread_exit != 2)
 		{
 			switch_sleep(20 * 1000);
 		}
 
-		close(vad->cfd);
+		
 		switch_thread_cond_destroy(vad->cond);
 		switch_mutex_destroy(vad->mutex);
 		switch_core_media_bug_flush(bug);
@@ -687,7 +687,7 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 
 				send(vad->cfd, serialize_json, strlen(serialize_json), 0);
 				close(vad->write_fd);
-			} else if (globals.isSync == 1) {
+			} /*else if (globals.isSync == 1) {
 				ret = send(vad->cfd, sendbuf, strlen(sendbuf), 0);
 				if (ret <= 0) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
@@ -696,7 +696,7 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 				}
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "when stop send len is :%d!!\n",
 								  ret);
-			}
+			}*/
 		} else if (vad->vad_state == SWITCH_VAD_STATE_TALKING) {
 			if (vad->log_flag == TRUE) {
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "State - USER IS TALKING\n");
@@ -747,7 +747,21 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "State - no sounds\n");
 				vad->log_flag = FALSE;
 			}
-
+			ret = send(vad->cfd, linear_frame->data, linear_frame->datalen, 0);
+				if (ret < 0) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+									  "no sounds send socket data fail errno is :%s!!\n", strerror(errno));
+					switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+				} else if (ret > 0 && vad->log_flag == TRUE) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+									  "no sounds send len is :%d everytime!!\n", ret);
+					vad->log_flag = FALSE;
+				} else if (ret == 0) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "send frame data lenth is :%d!!\n",
+									  ret);
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "no hangup\n");
+					//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+				}
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "VAD State is error\n");
 		}
