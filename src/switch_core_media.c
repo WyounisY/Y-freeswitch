@@ -3024,11 +3024,11 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_read_frame(switch_core_session
 			switch_goto_status(SWITCH_STATUS_SUCCESS, end);
 		}
 
-		if (switch_rtp_has_dtmf(engine->rtp_session)) {
-			switch_dtmf_t dtmf = { 0 };
-			switch_rtp_dequeue_dtmf(engine->rtp_session, &dtmf);
-			switch_channel_queue_dtmf(session->channel, &dtmf);
-		}
+		// if (switch_rtp_has_dtmf(engine->rtp_session)) {
+		// 	switch_dtmf_t dtmf = { 0 };
+		// 	switch_rtp_dequeue_dtmf(engine->rtp_session, &dtmf);
+		// 	switch_channel_queue_dtmf(session->channel, &dtmf);
+		// }
 
 		if (type != SWITCH_MEDIA_TYPE_TEXT && engine->read_frame.datalen > 0) {
 			uint32_t bytes = 0;

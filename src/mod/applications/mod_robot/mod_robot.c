@@ -1,12 +1,12 @@
 #include <switch.h>
 #include <sys/time.h>
-// #include "rnnoise.h"
 
 #define VAD_PRIVATE "_vad_"		  // vad模块哈希key值
 #define VAD_XML_CONFIG "vad.conf" // 配置文件名
-// #define VAD_EVENT_SUBCLASS "vad::detection" //vad自定义事件名
-#define PORT 8001		 // 目标地址端口号
-#define ADDR "127.0.0.1" // 目标地址IP
+#define PORT 8001				  // 目标地址端口号
+#define ADDR "127.0.0.1"		  // 目标地址IP
+#define MAX_SOCKET_QUEUE_LEN 1
+#define MAX_AUDIO_QUEUE_LEN 1000
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_vad_shutdown);
 SWITCH_MODULE_LOAD_FUNCTION(mod_vad_load);
@@ -20,18 +20,154 @@ typedef struct {
 	switch_memory_pool_t *pool;
 	int write_fd;
 	int cfd;
-	int pthread_exit;
-	char recv_path[128];
+	switch_bool_t pthread_exit;
 	char call_flag[16];
+	char sendbuf[32];
 	char *uuid;
 	switch_bool_t log_flag;
-	switch_bool_t cond_flag;
-	switch_mutex_t *mutex;
+	switch_bool_t iscontiue_flag;
 	switch_thread_t *thread;
-	switch_thread_cond_t *cond;
+	switch_file_handle_t *fh;
+	switch_mutex_t *audio_mutex;
+	switch_queue_t *audio_queue;
+	switch_size_t bytes;
+	int test_file;
 } switch_vad_docker_t;
 
+/**
+ * 解析 JSON 数据并返回 cJSON 对象。
+ * @param json_data 输入的 JSON 数据。
+ * @return 返回解析后的 cJSON 对象，如果解析失败则返回 NULL。
+ */
+static cJSON *parse_json_data(const char *json_data)
+{
+	cJSON *json;
+	if (!json_data) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "输入的 JSON 数据为空。\n");
+		return NULL;
+	}
 
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "解析 JSON 数据: %s\n", json_data);
+	json = cJSON_Parse(json_data);
+	if (!json) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "解析 JSON 数据失败。\n");
+		return NULL;
+	}
+
+	return json;
+}
+
+/**
+ * 解析 JSON 数据并返回 flag 字段的值，判断是否为 "call_end"。
+ * @param json_data 输入的 JSON 数据。
+ * @return 如果 flag 为 "call_end" 返回 true，否则返回 false。
+ */
+static switch_bool_t get_flag_and_check(const char *json_data)
+{
+	const char *flag;
+	switch_bool_t result;
+	cJSON *flag_item;
+	cJSON *json = parse_json_data(json_data);
+	if (!json) { return SWITCH_FALSE; }
+
+	flag_item = cJSON_GetObjectItem(json, "flag");
+	if (!flag_item) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "JSON 数据中缺少 flag 字段。\n");
+		cJSON_Delete(json);
+		return SWITCH_FALSE;
+	}
+
+	flag = cJSON_GetStringValue(flag_item);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "JSON flag 值: %s\n", flag);
+
+	result = strcmp(flag, "call_end") == 0;
+	cJSON_Delete(json);
+	return result;
+}
+
+/**
+ * 解析 JSON 数据并返回 isabort 字段的值。
+ * @param json_data 输入的 JSON 数据。
+ * @return 返回 isabort 字段的布尔值。
+ */
+// static switch_bool_t get_isabort(const char *json_data)
+// {
+// 	switch_bool_t isabort;
+// 	cJSON *isabort_item;
+// 	cJSON *json = parse_json_data(json_data);
+// 	if (!json) { return SWITCH_FALSE; }
+
+// 	isabort_item = cJSON_GetObjectItem(json, "isabort");
+// 	if (!isabort_item) {
+// 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "JSON 数据中缺少 isabort 字段。\n");
+// 		cJSON_Delete(json);
+// 		return SWITCH_FALSE;
+// 	}
+
+// 	isabort = cJSON_IsTrue(isabort_item);
+// 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "JSON isabort 值: %s\n", isabort ? "true" : "false");
+
+// 	cJSON_Delete(json);
+
+// 	return isabort;
+// }
+
+/**
+ * 解析 JSON 数据并返回 tts_file_path 字段的值。
+ * @param json_data 输入的 JSON 数据。
+ * @return 返回 tts_file_path 字段的值。
+ */
+static const char *get_tts_file_path(const char *json_data)
+{
+	cJSON *tts_path_item;
+	const char *tts_path;
+	char *tts_path_copy;
+	cJSON *json = parse_json_data(json_data);
+	if (!json) { return NULL; }
+
+	tts_path_item = cJSON_GetObjectItem(json, "tts_file_path");
+	if (!tts_path_item) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "JSON 数据中缺少 tts_file_path 字段。\n");
+		cJSON_Delete(json);
+		return NULL;
+	}
+
+	tts_path = cJSON_GetStringValue(tts_path_item);
+
+	tts_path_copy = strdup(tts_path); // 复制字符串
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "JSON tts_path_copy 值: %s\n", tts_path_copy);
+	cJSON_Delete(json);
+
+	return tts_path_copy;
+}
+
+/**
+ * 解析 JSON 数据并返回 isvad 字段的值。
+ * @param json_data 输入的 JSON 数据。
+ * @return 如果 isvad 为 true 返回 true，否则返回 false。
+ */
+static switch_bool_t get_isvad(const char *json_data)
+{
+	cJSON *isvad_item;
+	switch_bool_t result;
+	cJSON *json = parse_json_data(json_data);
+	if (!json) {
+		return SWITCH_FALSE; // 默认返回 false，解析失败或字段不存在
+	}
+
+	isvad_item = cJSON_GetObjectItem(json, "is_vad");
+	if (!isvad_item) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "is_vad 字段在 JSON 数据中不存在。\n");
+		cJSON_Delete(json);
+		return SWITCH_FALSE; // 默认返回 false，字段不存在
+	}
+
+	result = cJSON_IsTrue(isvad_item);
+
+	cJSON_Delete(json);
+	return result;
+}
 
 static char *vad_serialize_json(switch_vad_docker_t *vad, int callstatus)
 {
@@ -39,32 +175,21 @@ static char *vad_serialize_json(switch_vad_docker_t *vad, int callstatus)
 	char *writebuf = NULL;
 	switch_channel_t *channel = switch_core_session_get_channel(vad->session);
 	const char *nlp_type = switch_channel_get_variable(channel, "nlp_type");
-	if (nlp_type == NULL) {
+	if (!nlp_type) {
 		nlp_type = "huoli_model";
-		// 变量不存在
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "nlp_type变量不存在 !! : %s \n", nlp_type);
 	} else {
-		// 变量存在并且有值
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "nlp_type变量存在 !! : %s \n", nlp_type);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "nlp_type变量存在 !! : %s \n", nlp_type);
 	}
+
 	pJson = cJSON_CreateObject();
 	if (NULL == pJson) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "cJSON_CreateObject Failed !!\n");
 		return NULL;
 	}
 
-	if (callstatus == 1) {
-		cJSON_AddStringToObject(pJson, "flag", "call_start");
-	} else {
-		cJSON_AddStringToObject(pJson, "flag", "call_end");
-	}
-
+	cJSON_AddStringToObject(pJson, "flag", callstatus == 1 ? "call_start" : "call_end");
 	cJSON_AddStringToObject(pJson, "uuid", vad->uuid);
-	if (strlen(nlp_type) == 0) {
-		nlp_type = "gpt";
-	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "nlp_type is %s!!\n", nlp_type);
-	}
 
 	cJSON_AddStringToObject(pJson, "nlp_type", nlp_type);
 	cJSON_AddStringToObject(pJson, "asr_type", "stream");
@@ -81,57 +206,11 @@ static char *vad_serialize_json(switch_vad_docker_t *vad, int callstatus)
 	return writebuf;
 }
 
-static char *vad_parse_Json(char *readbuf, switch_vad_docker_t *vad)
-{
-	cJSON *pJson = NULL;
-	cJSON *pSub = NULL;
-	cJSON *pSub_Flag = NULL;
-	char *path = NULL;
-	char *flag = NULL;
-
-	if (NULL == readbuf) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "readbuf is null!!\n");
-		return NULL;
-	}
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "readbuf is %s\n", readbuf);
-	pJson = cJSON_Parse(readbuf);
-	if (NULL == pJson) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Create cJSON fail!!\n");
-		return NULL;
-	}
-
-	pSub = cJSON_GetObjectItem(pJson, "tts_file_path");
-	if (NULL == pSub) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Get tts_file_path fail!!\n");
-		return NULL;
-	} else {
-		path = pSub->valuestring;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Get tts_file_path is %s\n", path);
-		memset(vad->recv_path, 0, sizeof(vad->recv_path));
-		memcpy(vad->recv_path, path, strlen(path));
-	}
-
-	pSub_Flag = cJSON_GetObjectItem(pJson, "flag");
-	if (pSub_Flag != NULL) {
-		flag = pSub_Flag->valuestring;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Get flag is %s\n", flag);
-
-		if (0 == (strcmp(flag, "call_end")) || 0 == (strcmp(flag, "tts_end"))) {
-			memset(vad->call_flag, 0, sizeof(vad->call_flag));
-			memcpy(vad->call_flag, flag, strlen(flag));
-			cJSON_Delete(pJson);
-			return vad->call_flag;
-		}
-	} else if (NULL == pSub_Flag) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Get audio_file_path fail!!\n");
-		return NULL;
-	}
-
-	cJSON_Delete(pJson);
-	return vad->recv_path;
-}
-
+/**
+ * 创建客户端并连接到服务器。
+ * @param g_vad 指向 switch_vad_docker_t 结构体的指针。
+ * @return 成功返回 0，失败返回负值。
+ */
 static int create_client(switch_vad_docker_t *g_vad)
 {
 	struct sockaddr_in SockAddr = {0};
@@ -139,7 +218,7 @@ static int create_client(switch_vad_docker_t *g_vad)
 
 	g_vad->cfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (g_vad->cfd < 0) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to bind socket\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create socket\n");
 		return g_vad->cfd;
 	}
 
@@ -156,165 +235,173 @@ static int create_client(switch_vad_docker_t *g_vad)
 	return ret;
 }
 
-
+/**
+ * 初始化 VAD Docker 结构体。
+ *
+ * @param vad 输入的指向需要初始化的 switch_vad_docker_t 结构体的指针。
+ * @return 返回一个 switch_bool_t 值，表示初始化是否成功。
+ */
 static switch_bool_t switch_vad_docker_init(switch_vad_docker_t *vad)
 {
-	if (NULL == vad) return SWITCH_FALSE;
+	if (NULL == vad) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "vad为NULL");
+		return SWITCH_FALSE;
+	}
 
 	vad->write_fd = -1;
 	vad->cfd = -1;
 	vad->log_flag = TRUE;
 	vad->uuid = NULL;
-	vad->cond_flag = FALSE;
+	vad->bytes = 0;
+	vad->pthread_exit = FALSE;
+	vad->fh = NULL;
+	vad->iscontiue_flag = FALSE;
 
-	vad->pthread_exit = 0;
-	memset(vad->recv_path, 0, 128);
-
+	strcpy(vad->sendbuf, "playback_end");
+	switch_queue_create(&vad->audio_queue, MAX_AUDIO_QUEUE_LEN, switch_core_session_get_pool(vad->session));
 	return SWITCH_TRUE;
 }
 
-static void *SWITCH_THREAD_FUNC RecvAndPlayBackPthread(switch_thread_t *thread, void *user_data)
+/**
+ * 处理接收线程的函数。
+ * @param thread 指向 switch_thread_t 结构的指针。
+ * @param user_data 用户数据的指针。
+ * @return 返回处理后的数据指针。
+ */
+static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_data)
 {
 	switch_vad_docker_t *vad = (switch_vad_docker_t *)user_data;
 	char readbuf[360] = {0};
-	char sendbuf[320] = {0};
-	char *parse_json = NULL;
 	int ret = -1;
-	switch_status_t status = SWITCH_STATUS_SUCCESS;
+	void *dummy;
+	const char *tts_path;
+	switch_bool_t isvad;
 	switch_channel_t *channel = switch_core_session_get_channel(vad->session);
 
-	strcpy(sendbuf, "playback_end");
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-					  "----------------RecvAndPlayBackPthread start !!----------------\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "----------------RecvPthread start !!----------------\n");
 
 	while (switch_channel_media_ready(channel)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvAndPlayBackPthread phread while 1 %s!\n",
-						  vad->uuid);
 		ret = recv(vad->cfd, readbuf, sizeof(readbuf), 0);
 		if (ret < 0) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvAndPlayBackPthread: recv() fail errno: %s!!\n",
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvPthread: recv() fail errno: %s!!\n",
 							  strerror(errno));
 			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			break;
 		} else if (ret > 0) {
-			parse_json = vad_parse_Json(readbuf, vad);
-			if (NULL == parse_json) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvAndPlayBackPthread: parse_str is NULL!\n");
-				break;
-			} else if (0 == (strcmp(parse_json, "call_end"))) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-								  "RecvAndPlayBackPthread: vad_parse_Json success call flag is call_end!!\n");
+			// 将log标志进行重置，每次接收数据后，发送音频流的时候就会打印一条log
+			vad->log_flag = TRUE;
 
-				status = switch_ivr_play_file(vad->session, NULL, vad->recv_path, NULL);
-				if (status != SWITCH_STATUS_SUCCESS) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-									  "RecvAndPlayBackPthread: switch_ivr_play_file fail!!\n");
-					break;
-				}
-				// switch_assert(!(fh.flags & SWITCH_FILE_OPEN));
+			// 判断当前是否是接收到了模型的vad信息，表示有人说话了
+			isvad = get_isvad(readbuf);
+			if (!isvad) {
 
-				switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+				switch_mutex_lock(vad->audio_mutex);
+				// 清空 audio_queue
+				while (switch_queue_size(vad->audio_queue) >= 1) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "需要打断,正在清理audio_queue队列\n");
 
-				break;
-			} else if (0 == (strcmp(parse_json, "tts_end"))) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-								  "RecvAndPlayBackPthread: vad_parse_Json success ---- soundfile path is %s\n",
-								  parse_json);
-
-				status = switch_ivr_play_file(vad->session, NULL, vad->recv_path, NULL);
-				if (status != SWITCH_STATUS_SUCCESS) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-									  "RecvAndPlayBackPthread: switch_ivr_play_file fail!!\n");
-					break;
-				}
-				// switch_assert(!(fh.flags & SWITCH_FILE_OPEN));
-				if (!switch_channel_media_ready(channel)) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-									  "RecvAndPlayBackPthread: channel not ready! \n");
-					break;
-				}
-
-				vad->cond_flag = TRUE;
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-								  "RecvAndPlayBackPthread: vad->cond_flag set true \n");
-				switch_sleep(20 * 1000);
-
-				while (switch_channel_media_ready(channel)) {
-					// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvAndPlayBackPthread phread while 2
-					// %s!\n",vad->uuid);
-					if (vad->cond_flag == FALSE) {
-						switch_mutex_lock(vad->mutex);
-
-						ret = send(vad->cfd, sendbuf, strlen(sendbuf), 0);
-						if (ret < 0) {
-							switch_log_printf(
-								SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
-								"RecvAndPlayBackPthread: when stop send socket data fail errno is :%s!!\n",
-								strerror(errno));
-							switch_thread_cond_broadcast(vad->cond);
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-											  " RecvAndPlayBackPthread: -------- 失败时的signal信号已经发送!!\n");
-							switch_mutex_unlock(vad->mutex);
-							switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-							break;
-						} else if (ret > 0) {
-							switch_thread_cond_broadcast(vad->cond);
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, " -------- signal信号已经发送!!\n");
-
-							switch_mutex_unlock(vad->mutex);
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, " -------- 子线程解锁 !!\n");
-
-							break;
-						} else {
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
-											  "RecvAndPlayBackPthread: socket disconnect!\n");
-							switch_thread_cond_broadcast(vad->cond);
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-											  " RecvAndPlayBackPthread: -------- 失去连接时的signal信号已经发送!!\n");
-							switch_mutex_unlock(vad->mutex);
-							switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-							break;
-						}
-					} else {
-						ret = recv(vad->cfd, readbuf, sizeof(readbuf), MSG_PEEK | MSG_DONTWAIT);
-						if (ret > 0) {
-							parse_json = vad_parse_Json(readbuf, vad);
-							if (0 == (strcmp(parse_json, "call_end"))) {
-								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-												  "RecvAndPlayBackPthread: when user no sounds vad_parse_Json success "
-												  "call flag is call_end!!\n");
-								switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-								break;
-							}
-						} else {
-							switch_sleep(20 * 1000);
-						}
+					if (switch_queue_trypop(vad->audio_queue, &dummy) != SWITCH_STATUS_SUCCESS) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "trypop audio_queue 失败\n");
 					}
 				}
+				switch_mutex_unlock(vad->audio_mutex);
+
+				// 解析 tts_file_path 并读取文件内容
+				tts_path = get_tts_file_path(readbuf);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "读取音频数据的文件是%s\n", tts_path);
+				if (tts_path && strlen(tts_path) > 0) {
+					int fd = open(tts_path, O_RDONLY);
+					if (fd) {
+						char filebuf[320];
+						size_t bytes_read;
+						char *buffer_copy = NULL;
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "开始读取音频数据\n");
+						switch_mutex_lock(vad->audio_mutex);
+						// 将变量声明移动到代码块的开始
+						while ((bytes_read = read(fd, filebuf, sizeof(filebuf))) > 0) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "读取音频数据大小%zu\n",
+											  bytes_read);
+							// 将 data 写入文件
+							if (write(vad->test_file, filebuf, sizeof(filebuf)) != 320) {
+								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "写入数据出错！\n");
+							}
+
+							// 为 filebuf 申请一块内存
+							buffer_copy = (char *)malloc(sizeof(filebuf));
+							if (!buffer_copy) {
+								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "内存分配失败！\n");
+								// break;
+							}
+
+							// 将数据复制到新分配的内存中
+							memcpy(buffer_copy, filebuf, sizeof(filebuf));
+
+							while (switch_queue_trypush(vad->audio_queue, buffer_copy) != SWITCH_STATUS_SUCCESS) {
+								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "push audio_queue 失败\n");
+								continue;
+							}
+							memset(filebuf, 0, sizeof(filebuf));
+						}
+						switch_mutex_unlock(vad->audio_mutex);
+						close(fd);
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开文件: %s\n", tts_path);
+					}
+				}
+
+				switch_mutex_lock(vad->audio_mutex);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中上锁\n");
+				vad->iscontiue_flag = TRUE;
+				switch_mutex_unlock(vad->audio_mutex);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中解锁\n");
+
+				// 判断 flag 是否为 "call_end"
+				if (get_flag_and_check(readbuf)) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "线程接收到call_end标志\n");
+					break;
+				}
+			} else {
+				// 接收到打断标志停止播放
+				switch_mutex_lock(vad->audio_mutex);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中上锁\n");
+				vad->iscontiue_flag = FALSE;
+				switch_mutex_unlock(vad->audio_mutex);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中解锁\n");
 			}
+
 		} else {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvAndPlayBackPthread: socket disconnect!\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvPthread: socket disconnect!\n");
 			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			break;
 		}
+		// 清空操作
+		memset(readbuf, 0, sizeof(readbuf));
 	}
-	vad->pthread_exit = 2;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "RecvAndPlayBackPthread: pthread is over!");
+	vad->pthread_exit = TRUE;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "RecvPthread: pthread is over!");
 	return NULL;
 }
 
+/**
+ * 处理音频数据的回调函数。
+ *
+ * @param bug 指向 switch_media_bug_t 结构的指针，用于媒体处理的上下文。
+ * @param user_data 用户数据，通常为回调函数的上下文。
+ * @param type switch_abc_type_t 类型，表示回调的类型（如开始、进行中、结束等）。
+ * @return 返回一个 switch_bool_t 类型的值，表示处理是否成功。
+ */
 static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type)
 {
 	switch_vad_docker_t *vad = (switch_vad_docker_t *)user_data;
 	switch_core_session_t *session = vad->session;
 	switch_frame_t *linear_frame;
 	int ret = -1;
+	void *pop = NULL;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	char readbuf[256] = {0};
-	char *parse_json = NULL;
 	char *serialize_json = NULL;
 	switch_threadattr_t *thd_attr = NULL;
-
+	unsigned int audio_size = 0;
 	switch (type) {
 	case SWITCH_ABC_TYPE_INIT:
 		if ((ret = create_client(vad)) == -1) {
@@ -323,7 +410,7 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 		}
 
 		vad->uuid = switch_core_session_get_uuid(session);
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "   uuid %s \n", vad->uuid);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "这通电话的uuid: %s \n", vad->uuid);
 
 		serialize_json = vad_serialize_json(vad, 1);
 		if (NULL == serialize_json) {
@@ -350,18 +437,18 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "recv readbuf is %s \n", readbuf);
 		}
 
-		parse_json = vad_parse_Json(readbuf, vad);
-		if (NULL == parse_json) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "vad_parse_Json is NULL!!\n");
-			return SWITCH_TRUE;
-		} else if (0 == (strcmp(parse_json, "call_end"))) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-							  "vad_parse_Json success call flag is call_end!!\n");
+		// 判断 flag 是否为 "call_end"
+		if (get_flag_and_check(readbuf)) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "media bug 初始化的时候!!\n");
 			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			return SWITCH_TRUE;
-		} else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "first connect return: %s\n",
-							  parse_json);
+		}
+
+		// 打开文件
+		vad->test_file = open("/usr/local/freeswitch/recordings/test.raw", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (vad->test_file == -1) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Failed to open file ");
+			return SWITCH_FALSE;
 		}
 
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
@@ -369,16 +456,19 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 
 		vad->pool = switch_core_session_get_pool(session);
 
-		switch_mutex_init(&vad->mutex, SWITCH_MUTEX_NESTED, vad->pool);
-		switch_thread_cond_create(&vad->cond, vad->pool);
+		// 在初始化代码中创建互斥锁
+		switch_mutex_init(&vad->audio_mutex, SWITCH_MUTEX_NESTED, vad->pool);
 
 		switch_threadattr_create(&thd_attr, vad->pool);
 		switch_threadattr_detach_set(thd_attr, 1);
 		switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
-		switch_thread_create(&vad->thread, thd_attr, RecvAndPlayBackPthread, vad, vad->pool);
+		switch_thread_create(&vad->thread, thd_attr, RecvPthread, vad, vad->pool);
 
 		break;
 	case SWITCH_ABC_TYPE_CLOSE:
+
+		// 关闭文件
+		close(vad->test_file);
 
 		ret = send(vad->cfd, "call_end", strlen("call_end"), 0);
 		if (ret <= 0) {
@@ -391,13 +481,10 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 		close(vad->write_fd);
 
 		close(vad->cfd);
-		while (vad->pthread_exit != 2) { switch_sleep(20 * 1000); }
-
-		switch_thread_cond_destroy(vad->cond);
-		switch_mutex_destroy(vad->mutex);
+		while (!vad->pthread_exit) { switch_sleep(20 * 1000); }
+		switch_mutex_destroy(vad->audio_mutex);
 		switch_core_media_bug_flush(bug);
 
-		// switch_core_session_reset(session, SWITCH_TRUE, SWITCH_TRUE);
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 						  "Stopping VAD detection for audio stream\n");
 		break;
@@ -410,21 +497,6 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 
 		linear_frame = switch_core_media_bug_get_read_replace_frame(bug);
 
-		if (vad->cond_flag == TRUE) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "vad->cond_flag == TRUE \n");
-			switch_mutex_lock(vad->mutex);
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "callback上锁了 \n");
-
-			vad->cond_flag = FALSE;
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "vad->cond_flag == FALSE \n");
-
-			switch_thread_cond_timedwait(vad->cond, vad->mutex, 120 * 1000);
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "退出等待状态 \n");
-
-			switch_mutex_unlock(vad->mutex);
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "callback解锁了 \n");
-		}
-
 		ret = send(vad->cfd, linear_frame->data, linear_frame->datalen, 0);
 		if (ret < 0) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
@@ -436,22 +508,53 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 								  ret);
 				vad->log_flag = FALSE;
 			}
-
-		} else if (ret == 0) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "send frame data lenth is :%d!!\n",
-							  ret);
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "no hangup\n");
-			// switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 		} else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "发送语音流时发生未知错错误 %d\n",
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "发送的音频流字节数is :%d!!\n",
 							  ret);
+		}
+
+		switch_mutex_lock(vad->audio_mutex);
+		if (vad->iscontiue_flag) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "获取音频队列的开关打开 \n");
+			audio_size = switch_queue_size(vad->audio_queue);
+			if (audio_size >= 1) {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "音频队列的数据大于等于1 %d \n",
+								  audio_size);
+				switch_queue_pop(vad->audio_queue, &pop);
+				//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "弹出的数据是%s\n", (char *)pop);
+
+				// 复制pop指向的内容到data
+				memcpy(linear_frame->data, pop, 320);
+				switch_core_session_write_frame(vad->session, linear_frame, SWITCH_IO_FLAG_NONE, 0);
+				// 将pop清空
+				pop = NULL;
+			} else {
+				ret = send(vad->cfd, vad->sendbuf, strlen(vad->sendbuf), 0);
+				if (ret <= 0) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "发送play back end的时候发生错误 :%s!!\n",
+									  strerror(errno));
+					switch_mutex_unlock(vad->audio_mutex);
+					switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+					break;
+				} else {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "play back end发送成功\n");
+				}
+				vad->iscontiue_flag = FALSE;
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "音频队列大小为空 \n");
+			}
+		}
+		switch_mutex_unlock(vad->audio_mutex);
+
+		if (vad->pthread_exit) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "检测到接收线程退出，挂断电话。\n");
+			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 		}
 
 		break;
 	default:
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "media bug 走入默认case。\n");
 		break;
 	}
-
 	return SWITCH_TRUE;
 }
 
@@ -476,6 +579,7 @@ SWITCH_STANDARD_APP(vad_start_function)
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	switch_vad_docker_t *s_vad = NULL;
 	switch_codec_implementation_t imp = {0};
+	switch_bool_t ret;
 	int flags = 0;
 
 	if (!zstr(data)) {
@@ -508,8 +612,11 @@ SWITCH_STANDARD_APP(vad_start_function)
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Read imp %u %u.\n", imp.samples_per_second,
 					  imp.number_of_channels);
 
-	switch_vad_docker_init(s_vad);
-
+	ret = switch_vad_docker_init(s_vad);
+	if (!ret) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "程序初始化失败，结束通话\n");
+		return;
+	}
 	flags = SMBF_READ_REPLACE | SMBF_ANSWER_REQ;
 	status =
 		switch_core_media_bug_add(session, "vad_read", NULL, vad_audio_callback, s_vad, 0, flags, &s_vad->read_bug);
