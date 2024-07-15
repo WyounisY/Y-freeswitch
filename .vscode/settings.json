@@ -4,6 +4,17 @@
         "array": "c",
         "string": "c",
         "string_view": "c",
-        "vector": "c"
+        "vector": "c",
+        "switch_ssl.h": "c",
+        "switch_core_pvt.h": "c",
+        "time.h": "c",
+        "switch_types.h": "c",
+        "__hash_table": "c",
+        "__tree": "c",
+        "type_traits": "c",
+        "limits": "c",
+        "ratio": "c",
+        "tuple": "c",
+        "variant": "c"
     }
 }
