@@ -282,7 +282,7 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 				switch_mutex_lock(vad->audio_mutex);
 				// 清空 audio_queue
 				while (switch_queue_size(vad->audio_queue) >= 1) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "需要打断,正在清理audio_queue队列\n");
+					//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "需要打断,正在清理audio_queue队列\n");
 
 					if (switch_queue_trypop(vad->audio_queue, &dummy) != SWITCH_STATUS_SUCCESS) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "trypop audio_queue 失败\n");
