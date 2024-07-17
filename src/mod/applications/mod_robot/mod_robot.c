@@ -15,36 +15,36 @@ SWITCH_MODULE_DEFINITION(mod_vad, mod_vad_load, mod_vad_shutdown, NULL);
 SWITCH_STANDARD_APP(vad_start_function);
 
 typedef struct {
-	//维护整个通话的session 会话变量
+	// 维护整个通话的session 会话变量
 	switch_core_session_t *session;
-	//编码信息 音频数据的详细信息
+	// 编码信息 音频数据的详细信息
 	switch_codec_implementation_t *read_impl;
-	//放在这通电话上的media bug 
+	// 放在这通电话上的media bug
 	switch_media_bug_t *read_bug;
-	//通话的内存池
+	// 通话的内存池
 	switch_memory_pool_t *pool;
-	//socket 连接符 
+	// socket 连接符
 	int cfd;
-	//判断线程是否退出 true是退出 false是没有退出
+	// 判断线程是否退出 true是退出 false是没有退出
 	switch_bool_t pthread_exit;
-	//该段音频文件中的数据是否播放完毕 true是播放完毕 false是没有播放完毕
+	// 该段音频文件中的数据是否播放完毕 true是播放完毕 false是没有播放完毕
 	switch_bool_t is_playback_end;
-	//发送 “playback_end” 缓冲区
+	// 发送 “playback_end” 缓冲区
 	char sendbuf[32];
-	//这条腿的uuid
+	// 这条腿的uuid
 	char *uuid;
-	//打印log true 打印 false 不打印
+	// 打印log true 打印 false 不打印
 	switch_bool_t log_flag;
-	//判断是否继续播放音频   true 可以继续播放 false 被打断不能继续播放
+	// 判断是否继续播放音频   true 可以继续播放 false 被打断不能继续播放
 	switch_bool_t iscontiue_flag;
-	//线程变量
+	// 线程变量
 	switch_thread_t *thread;
-//音频锁 主要针对iscontiue_flag
+	// 音频锁 主要针对iscontiue_flag
 	switch_mutex_t *audio_mutex;
-	//音频数据队列
+	// 音频数据队列
 	switch_queue_t *audio_queue;
-	//测试文件描述符
-	//int test_file;
+	// 测试文件描述符
+	// int test_file;
 } switch_vad_docker_t;
 
 /**
@@ -282,7 +282,7 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 				switch_mutex_lock(vad->audio_mutex);
 				// 清空 audio_queue
 				while (switch_queue_size(vad->audio_queue) >= 1) {
-					//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "需要打断,正在清理audio_queue队列\n");
+					// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "需要打断,正在清理audio_queue队列\n");
 
 					if (switch_queue_trypop(vad->audio_queue, &dummy) != SWITCH_STATUS_SUCCESS) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "trypop audio_queue 失败\n");
@@ -368,7 +368,7 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 		memset(readbuf, 0, sizeof(readbuf));
 	}
 	vad->pthread_exit = TRUE;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "RecvPthread: pthread is over!");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "RecvPthread: pthread is over!\n");
 	return NULL;
 }
 
@@ -458,7 +458,7 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 	case SWITCH_ABC_TYPE_CLOSE:
 
 		// 关闭文件
-		//close(vad->test_file);
+		// close(vad->test_file);
 
 		ret = send(vad->cfd, "call_end", strlen("call_end"), 0);
 		if (ret <= 0) {
@@ -486,20 +486,23 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 
 		linear_frame = switch_core_media_bug_get_read_replace_frame(bug);
 
-		ret = send(vad->cfd, linear_frame->data, linear_frame->datalen, 0);
-		if (ret < 0) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
-							  "when talking send socket data fail errno is :%s!!\n", strerror(errno));
-			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-		} else if (ret > 0) {
-			if (vad->log_flag == TRUE) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "send len is :%d everytime!!\n",
+		// 线程退出不再发送音频数据
+		if (!vad->pthread_exit) {
+			ret = send(vad->cfd, linear_frame->data, linear_frame->datalen, 0);
+			if (ret < 0) {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+								  "when talking send socket data fail errno is :%s!!\n", strerror(errno));
+				switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+			} else if (ret > 0) {
+				if (vad->log_flag == TRUE) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+									  "send len is :%d everytime!!\n", ret);
+					vad->log_flag = FALSE;
+				}
+			} else {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "发送的音频流字节数is :%d!!\n",
 								  ret);
-				vad->log_flag = FALSE;
 			}
-		} else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "发送的音频流字节数is :%d!!\n",
-							  ret);
 		}
 
 		switch_mutex_lock(vad->audio_mutex);
@@ -514,6 +517,7 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 				if (vad->log_flag == TRUE) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
 									  "音频队列的数据大于等于1 %d \n", audio_size);
+					vad->log_flag = FALSE;
 				}
 				switch_queue_pop(vad->audio_queue, &pop);
 				// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "弹出的数据是%s\n", (char *)pop);
@@ -522,8 +526,8 @@ static switch_bool_t vad_audio_callback(switch_media_bug_t *bug, void *user_data
 				memcpy(linear_frame->data, pop, 320);
 
 				switch_core_session_write_frame(vad->session, linear_frame, SWITCH_IO_FLAG_NONE, 0);
-				//switch_core_media_bug_set_write_replace_frame(bug, linear_frame);
-				
+				// switch_core_media_bug_set_write_replace_frame(bug, linear_frame);
+
 				// 将pop清空
 				pop = NULL;
 			} else {
