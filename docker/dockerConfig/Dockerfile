@@ -62,21 +62,22 @@ RUN cd /usr/src/freeswitch && make -j`nproc` && make install
 RUN ln -sf /usr/local/freeswitch/bin/freeswitch /usr/bin/ 
 RUN ln -sf /usr/local/freeswitch/bin/fs_cli /usr/bin/
 
-RUN cd /usr/src/
-RUN git clone https://github.com/dpirch/libfvad.git \
-    && cd libfvad \
-    && autoreconf -i \
-    && ./configure \
-    && make \
-    && make install \
-    && ldconfig
+# RUN cd /usr/src/
+# RUN git clone https://github.com/dpirch/libfvad.git \
+#     && cd libfvad \
+#     && autoreconf -i \
+#     && ./configure \
+#     && make \
+#     && make install \
+#     && ldconfig
 
 COPY mod_vad /usr/src/freeswitch/src/mod/applications/mod_vad
-COPY mod_uuid_playback /usr/src/freeswitch/src/mod/applications/mod_uuid_playback
-COPY mod_uuid_playback_continue /usr/src/freeswitch/src/mod/applications/mod_uuid_playback_continue
-COPY vad.conf.xml /usr/local/freeswitch/conf/autoload_configs
+#COPY mod_uuid_playback /usr/src/freeswitch/src/mod/applications/mod_uuid_playback
+#COPY mod_uuid_playback_continue /usr/src/freeswitch/src/mod/applications/mod_uuid_playback_continue
+#COPY vad.conf.xml /usr/local/freeswitch/conf/autoload_configs
 COPY modules.conf.xml /usr/local/freeswitch/conf/autoload_configs
-COPY cdr_csv.conf.xml /usr/local/freeswitch/conf/autoload_configs
+COPY switch_core_media.c /usr/src/freeswitch/src
+#COPY cdr_csv.conf.xml /usr/local/freeswitch/conf/autoload_configs
 
 RUN cd /usr/src/freeswitch/src/mod/applications/mod_vad \
     && make \
