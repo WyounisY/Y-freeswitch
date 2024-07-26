@@ -48,6 +48,8 @@ typedef struct {
 	switch_queue_t *audio_queue;
 	// 测试文件描述符
 	// int test_file;
+	// 尝试次数
+	int retry_count;
 } switch_vad_docker_t;
 
 /**
@@ -252,8 +254,6 @@ static switch_bool_t switch_vad_docker_close(switch_vad_docker_t *vad)
 	return SWITCH_TRUE;
 }
 
-
-
 /**
  * 处理接收线程的函数。
  * @param thread 指向 switch_thread_t 结构的指针。
@@ -317,12 +317,6 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 							break;
 						}
 						while ((bytes_read = read(fd, filebuf, sizeof(filebuf))) > 0) {
-							// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-							// "读取音频数据大小%zu\n",bytes_read);
-							//  将 data 写入文件
-							// if (write(vad->test_file, filebuf, sizeof(filebuf)) != 320) {
-							// 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "写入数据出错！\n");
-							// }
 
 							// 为 filebuf 申请一块内存
 							buffer_copy = (char *)malloc(sizeof(filebuf));
@@ -335,8 +329,12 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 							memcpy(buffer_copy, filebuf, sizeof(filebuf));
 
 							while (switch_queue_trypush(vad->audio_queue, buffer_copy) != SWITCH_STATUS_SUCCESS) {
+								if (vad->retry_count >= 3) {
+									vad->retry_count = 0;
+									break;
+								}
+								vad->retry_count++;
 								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "push audio_queue 失败\n");
-								continue;
 							}
 							memset(filebuf, 0, sizeof(filebuf));
 						}
@@ -374,6 +372,10 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 		}
 		// 清空操作
 		memset(readbuf, 0, sizeof(readbuf));
+
+		if(vad->audio_pthread_exit){
+			break;
+		}
 	}
 	vad->pthread_exit = TRUE;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "RecvPthread: pthread is over!\n");
@@ -411,6 +413,7 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "读取是数据帧出错");
 			break;
 		}
+		switch_ivr_parse_all_events(session);
 		// 线程退出不再发送音频数据
 		if (!vad->pthread_exit) {
 			ret = send(vad->cfd, read_frame->data, read_frame->datalen, 0);
@@ -451,7 +454,7 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 				memcpy(read_frame->data, pop, 320);
 
 				switch_core_session_write_frame(vad->session, read_frame, SWITCH_IO_FLAG_NONE, 0);
-				//switch_core_media_bug_set_write_replace_frame(bug, linear_frame);
+				// switch_core_media_bug_set_write_replace_frame(bug, linear_frame);
 
 				// 将pop清空
 				pop = NULL;
@@ -477,6 +480,12 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "检测到接收线程退出，挂断电话。\n");
 			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 		}
+
+		if (switch_channel_test_flag(channel, CF_BREAK)) {
+			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+			switch_channel_clear_flag(channel, CF_BREAK);
+			break;
+		}
 	}
 	vad->audio_pthread_exit = TRUE;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "AudioProcessPthread: pthread is over!\n");
@@ -491,25 +500,26 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
  */
 static switch_bool_t switch_vad_docker_init(switch_vad_docker_t *vad)
 {
-	
+
 	int ret = -1;
-    char readbuf[256] = {0};
-    char *serialize_json = NULL;
-    switch_threadattr_t *thd_attr = NULL;
-    switch_threadattr_t *thd_farm = NULL;
-    switch_core_session_t *session = NULL;
-    switch_channel_t *channel = NULL;
-    
-    vad->cfd = -1;
-    vad->log_flag = TRUE;
-    vad->uuid = NULL;
-    vad->pthread_exit = FALSE;
-    vad->iscontiue_flag = FALSE;
-    vad->is_playback_end = FALSE;
-    vad->audio_pthread_exit = FALSE;
-    
-    session = vad->session;
-    channel = switch_core_session_get_channel(session);
+	char readbuf[256] = {0};
+	char *serialize_json = NULL;
+	switch_threadattr_t *thd_attr = NULL;
+	switch_threadattr_t *thd_farm = NULL;
+	switch_core_session_t *session = NULL;
+	switch_channel_t *channel = NULL;
+
+	vad->cfd = -1;
+	vad->log_flag = TRUE;
+	vad->uuid = NULL;
+	vad->pthread_exit = FALSE;
+	vad->iscontiue_flag = FALSE;
+	vad->is_playback_end = FALSE;
+	vad->audio_pthread_exit = FALSE;
+	vad->retry_count = 0;
+
+	session = vad->session;
+	channel = switch_core_session_get_channel(session);
 
 	if (NULL == vad) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "vad为NULL");
