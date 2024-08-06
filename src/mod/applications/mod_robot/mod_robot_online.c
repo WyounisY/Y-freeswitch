@@ -363,6 +363,12 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 				vad->iscontiue_flag = FALSE;
 				switch_mutex_unlock(vad->audio_mutex);
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中解锁\n");
+				// 判断 flag 是否为 "call_end"
+				if (get_flag_and_check(readbuf)) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "线程接收到call_end标志\n");
+					vad->is_playback_end = TRUE;
+					break;
+				}
 			}
 
 		} else {
