@@ -272,7 +272,7 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "----------------RecvPthread start !!----------------\n");
 
-	while (switch_channel_media_ready(channel)) {
+	while (switch_channel_ready(channel)) {
 		ret = recv(vad->cfd, readbuf, sizeof(readbuf), 0);
 		if (ret < 0) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvPthread: recv() fail errno: %s!!\n",
