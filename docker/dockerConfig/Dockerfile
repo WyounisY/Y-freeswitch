@@ -1,7 +1,7 @@
 #非直接启动freeswitch的dockerfile，进入容器之后再启动
 #系统内核与docker系统不兼容时将bullseye切换为buster
 FROM debian:buster
-MAINTAINER Andrey Volk <andrey@signalwire.com>
+LABEL Andrey Volk <andrey@signalwire.com>
 
 RUN sed -i 's/http:\/\/deb.debian.org/http:\/\/mirrors.aliyun.com/g' /etc/apt/sources.list
 
@@ -9,10 +9,14 @@ RUN sed -i 's/http:\/\/deb.debian.org/http:\/\/mirrors.aliyun.com/g' /etc/apt/so
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -yq install git
 
 #RUN git clone https://github.com/signalwire/freeswitch /usr/src/freeswitch
-RUN cd /usr/src/ \
-    && git clone https://github.com/signalwire/freeswitch.git -bv1.10.10 freeswitch \
-    && cd freeswitch \
-    && git config pull.rebase true
+# RUN cd /usr/src/ \
+#     # 增加缓冲区大小
+#     && git config --global http.postBuffer 524288000 \   
+#     && git clone https://github.com/signalwire/freeswitch.git -bv1.10.10 freeswitch \
+#     && cd freeswitch \
+#     && git config pull.rebase true
+COPY ../freeswitch /usr/src/freeswitch
+
 RUN cd /usr/src/
 RUN git clone https://github.com/signalwire/libks /usr/src/libs/libks
 RUN git clone https://github.com/freeswitch/sofia-sip /usr/src/libs/sofia-sip
@@ -55,6 +59,8 @@ RUN cd /usr/src/libs/signalwire-c && PKG_CONFIG_PATH=/usr/lib/pkgconfig cmake . 
 # Enable modules
 RUN sed -i 's|#formats/mod_shout|formats/mod_shout|' /usr/src/freeswitch/build/modules.conf.in
 
+COPY switch_core_media.c /usr/src/freeswitch/src
+
 RUN cd /usr/src/freeswitch && ./bootstrap.sh -j
 RUN cd /usr/src/freeswitch && ./configure
 RUN cd /usr/src/freeswitch && make -j`nproc` && make install
@@ -77,6 +83,9 @@ COPY mod_vad /usr/src/freeswitch/src/mod/applications/mod_vad
 #COPY vad.conf.xml /usr/local/freeswitch/conf/autoload_configs
 COPY modules.conf.xml /usr/local/freeswitch/conf/autoload_configs
 COPY switch_core_media.c /usr/src/freeswitch/src
+COPY freeswitch_monitor.sh /usr/local/freeswitch/scripts
+COPY log_process.sh /usr/local/freeswitch/scripts
+COPY tts_file_process.sh /usr/local/freeswitch/scripts
 #COPY cdr_csv.conf.xml /usr/local/freeswitch/conf/autoload_configs
 
 RUN cd /usr/src/freeswitch/src/mod/applications/mod_vad \

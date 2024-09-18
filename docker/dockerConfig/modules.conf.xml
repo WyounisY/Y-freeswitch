@@ -139,8 +139,8 @@
     <!-- Third party modules -->
     <!--<load module="mod_nibblebill"/>-->
     <load module="mod_callcenter"/>
-<load module="mod_uuid_playback"/>
-<load module="mod_uuid_playback_continue"/>
-<load module="mod_vad"/>
+    <!--<load module="mod_uuid_playback"/>
+    <load module="mod_uuid_playback_continue"/>-->
+    <load module="mod_vad"/>
   </modules>
 </configuration>
