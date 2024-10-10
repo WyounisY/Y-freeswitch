@@ -7,7 +7,7 @@
 #define ADDR "127.0.0.1"		  // 目标地址IP
 #define MAX_SOCKET_QUEUE_LEN 1
 #define MAX_AUDIO_QUEUE_LEN 3000
-#define WAV_HEADER_SIZE 44 // wav文件的开头44个字节是文件信息，跳过直接拿音频数据
+#define ADD_SIZE 4
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_vad_shutdown);
 SWITCH_MODULE_LOAD_FUNCTION(mod_vad_load);
@@ -51,6 +51,29 @@ typedef struct {
 	// 尝试次数
 	int retry_count;
 } switch_vad_docker_t;
+
+// 定义 RIFF Chunk 和 Subchunk 的结构
+typedef struct {
+	char chunkID[4]; // RIFF
+	unsigned int chunkSize;
+	char format[4]; // WAVE
+} RIFFHeader;
+
+typedef struct {
+	char subchunk1ID[4]; // "fmt "
+	unsigned int subchunk1Size;
+	unsigned short audioFormat;
+	unsigned short numChannels;
+	unsigned int sampleRate;
+	unsigned int byteRate;
+	unsigned short blockAlign;
+	unsigned short bitsPerSample;
+} FmtSubchunk;
+
+typedef struct {
+	char subchunk2ID[4]; // "data"
+	unsigned int subchunk2Size;
+} DataSubchunk;
 
 /**
  * 解析 JSON 数据并返回 cJSON 对象。
@@ -254,6 +277,57 @@ static switch_bool_t switch_vad_docker_close(switch_vad_docker_t *vad)
 	return SWITCH_TRUE;
 }
 
+// 封装的函数：用于判断 WAV 文件头部的大小
+static long getWavHeaderSize(const char *filename)
+{
+	long headerSize = 0;
+	DataSubchunk dataSubchunk;
+	unsigned int fmtChunkSize = 0;
+	FmtSubchunk fmtSubchunk;
+	RIFFHeader riffHeader;
+	FILE *file = fopen(filename, "rb");
+	if (file == NULL) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开文件 %s\n", filename);
+		return -1;
+	}
+
+	// 读取 RIFF 头部
+	fread(&riffHeader, sizeof(RIFFHeader), 1, file);
+
+	// 检查 RIFF 头部是否有效
+	if (strncmp(riffHeader.chunkID, "RIFF", 4) != 0 || strncmp(riffHeader.format, "WAVE", 4) != 0) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "不是有效的 WAV 文件\n");
+		fclose(file);
+		return -1;
+	}
+
+	// 读取 fmt subchunk
+	fread(&fmtSubchunk, sizeof(FmtSubchunk), 1, file);
+
+	// 计算 fmt 块的大小
+	fmtChunkSize = fmtSubchunk.subchunk1Size;
+
+	// 如果 fmt 块大小大于 16，说明是扩展格式，跳过额外的数据
+	if (fmtChunkSize > 16) { fseek(file, fmtChunkSize - 16, SEEK_CUR); }
+
+	// 读取接下来的块，寻找 "data" 块
+	while (fread(&dataSubchunk, sizeof(DataSubchunk), 1, file)) {
+		// 检查是否是 "data" 块
+		if (strncmp(dataSubchunk.subchunk2ID, "data", 4) == 0) {
+			break;
+		} else {
+			// 如果不是 "data" 块，跳过这个块的数据
+			fseek(file, dataSubchunk.subchunk2Size, SEEK_CUR);
+		}
+	}
+
+	// 计算头部的总大小（从文件开始到 "data" 块开始）
+	headerSize = ftell(file) - sizeof(dataSubchunk.subchunk2Size);
+
+	fclose(file);
+	return headerSize;
+}
+
 /**
  * 处理接收线程的函数。
  * @param thread 指向 switch_thread_t 结构的指针。
@@ -262,6 +336,7 @@ static switch_bool_t switch_vad_docker_close(switch_vad_docker_t *vad)
  */
 static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_data)
 {
+	long headerSize = 0;
 	switch_vad_docker_t *vad = (switch_vad_docker_t *)user_data;
 	char readbuf[360] = {0};
 	int ret = -1;
@@ -310,12 +385,23 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "开始读取音频数据\n");
 						switch_mutex_lock(vad->audio_mutex);
 
+						headerSize = getWavHeaderSize(tts_path);
+						if (headerSize != -1) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WAV 文件头部大小为：%ld 字节\n",
+											  headerSize);
+							headerSize = headerSize +ADD_SIZE;
+						} else {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+											  "文件不是有效的 WAV 文件或读取失败。\n");
+						}
+
 						// 跳过 WAV 文件头
-						if (lseek(fd, WAV_HEADER_SIZE, SEEK_SET) < 0) {
+						if (lseek(fd, headerSize, SEEK_SET) < 0) {
 							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "音频文件跳过开头固定字节数失败\n");
 							close(fd);
 							break;
 						}
+
 						while ((bytes_read = read(fd, filebuf, sizeof(filebuf))) > 0) {
 
 							// 为 filebuf 申请一块内存
@@ -379,9 +465,7 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 		// 清空操作
 		memset(readbuf, 0, sizeof(readbuf));
 
-		if(vad->audio_pthread_exit){
-			break;
-		}
+		if (vad->audio_pthread_exit) { break; }
 	}
 	vad->pthread_exit = TRUE;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "RecvPthread: pthread is over!\n");
