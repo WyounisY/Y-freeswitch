@@ -16,5 +16,6 @@
         "ratio": "c",
         "tuple": "c",
         "variant": "c"
-    }
+    },
+    "cmake.sourceDirectory": "/Users/wangyuan/Desktop/code/Y-freeswitch/src"
 }
