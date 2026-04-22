@@ -57,7 +57,6 @@ SWITCH_STANDARD_APP(audio_stream_app_function)
 	void *read_buf = NULL;
 	switch_size_t read_len = 0;
 	switch_frame_t frame = {0};
-	switch_timer_t timer = {0};
 	switch_codec_t read_codec = {0};
 	char *audio_path = AUDIO_PATH;
 
@@ -77,18 +76,12 @@ SWITCH_STANDARD_APP(audio_stream_app_function)
 							   "L16",
 							   NULL,
 							   NULL,
-							   48000,
-							   20,
-							   1,
+							   8000,        // 8k采样率
+							   20,          // 20ms帧大小
+							   1,           // 单声道
 							   SWITCH_CODEC_FLAG_ENCODE | SWITCH_CODEC_FLAG_DECODE,
 							   NULL, NULL) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Cannot initialize read codec\n");
-		goto end;
-	}
-
-	// 初始化定时器
-	if (switch_timer_init(&timer, "soft", 20000, NULL) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Cannot initialize timer\n");
 		goto end;
 	}
 
@@ -102,8 +95,7 @@ SWITCH_STANDARD_APP(audio_stream_app_function)
 		// 打开音频文件
 		memset(&file_handle, 0, sizeof(file_handle));
 		file_handle.channels = 1;
-		file_handle.samples_per_second = 48000;
-		file_handle.microseconds = 20000;
+		file_handle.samples_per_second = 8000;  // 8k采样率
 
 		if (switch_core_file_open(&file_handle,
 								  files[current_file],
@@ -140,16 +132,12 @@ SWITCH_STANDARD_APP(audio_stream_app_function)
 			frame.rate = file_handle.samples_per_second;
 
 			// 发送到通道
-			switch_mutex_lock(file_handle.file_interface->mutex);
-			status = switch_core_file_write(&file_handle, frame.data, &frame.datalen);
-			switch_mutex_unlock(file_handle.file_interface->mutex);
-
-			if (status != SWITCH_STATUS_SUCCESS) {
+			if (switch_core_session_write_frame(session, &frame, SWITCH_IO_FLAG_NONE) != SWITCH_STATUS_SUCCESS) {
 				break;
 			}
 
-			// 等待定时器
-			switch_timer_next(&timer);
+			// 简单的延时控制
+			switch_yield(10000); // 10ms
 		}
 
 		// 关闭当前文件
@@ -170,10 +158,6 @@ end:
 
 	if (read_buf) {
 		switch_core_session_free(session, &read_buf);
-	}
-
-	if (timer.timer_interface) {
-		switch_timer_destroy(&timer);
 	}
 
 	if (read_codec.codec_interface) {
