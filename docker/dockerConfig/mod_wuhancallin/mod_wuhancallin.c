@@ -1,18 +1,18 @@
 #include <switch.h>
 #include <sys/time.h>
 
-#define CALLIN_PRIVATE "_callin_"		  // callin模块哈希key值
-#define CALLIN_XML_CONFIG "callin.conf" // 配置文件名
-#define PORT 8005				  // 目标地址端口号
+#define CALLIN_PRIVATE "_wuhancallin_"		  // wuhancallin模块哈希key值
+#define CALLIN_XML_CONFIG "wuhancallin.conf" // 配置文件名
+#define PORT 8015				  // 目标地址端口号
 #define ADDR "127.0.0.1"		  // 目标地址IP
 #define MAX_SOCKET_QUEUE_LEN 1
 #define MAX_AUDIO_QUEUE_LEN 3000
 #define ADD_SIZE 4
 
-SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_callin_shutdown);
-SWITCH_MODULE_LOAD_FUNCTION(mod_callin_load);
-SWITCH_MODULE_DEFINITION(mod_callin, mod_callin_load, mod_callin_shutdown, NULL);
-SWITCH_STANDARD_APP(callin_start_function);
+SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_wuhancallin_shutdown);
+SWITCH_MODULE_LOAD_FUNCTION(mod_wuhancallin_load);
+SWITCH_MODULE_DEFINITION(mod_wuhancallin, mod_wuhancallin_load, mod_wuhancallin_shutdown, NULL);
+SWITCH_STANDARD_APP(wuhancallin_start_function);
 
 typedef struct {
 	// 维护整个通话的session 会话变量
@@ -50,7 +50,7 @@ typedef struct {
 	// int test_file;
 	// 尝试次数
 	int retry_count;
-} switch_callin_docker_t;
+} switch_wuhancallin_docker_t;
 
 // 定义 RIFF Chunk 和 Subchunk 的结构
 typedef struct {
@@ -157,43 +157,63 @@ static const char *get_tts_file_path(const char *json_data)
 }
 
 /**
- * 解析 JSON 数据并返回 iscallin 字段的值。
+ * 解析 JSON 数据并返回 iswuhancallin 字段的值。
  * @param json_data 输入的 JSON 数据。
- * @return 如果 iscallin 为 true 返回 true，否则返回 false。
+ * @return 如果 iswuhancallin 为 true 返回 true，否则返回 false。
  */
-static switch_bool_t get_iscallin(const char *json_data)
+static switch_bool_t get_iswuhancallin(const char *json_data)
 {
-	cJSON *iscallin_item;
+	cJSON *iswuhancallin_item;
 	switch_bool_t result;
 	cJSON *json = parse_json_data(json_data);
 	if (!json) {
 		return SWITCH_FALSE; // 默认返回 false，解析失败或字段不存在
 	}
 
-	iscallin_item = cJSON_GetObjectItem(json, "is_callin");
-	if (!iscallin_item) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "is_callin 字段在 JSON 数据中不存在。\n");
+	iswuhancallin_item = cJSON_GetObjectItem(json, "is_wuhancallin");
+	if (!iswuhancallin_item) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "is_wuhancallin 字段在 JSON 数据中不存在。\n");
 		cJSON_Delete(json);
 		return SWITCH_FALSE; // 默认返回 false，字段不存在
 	}
 
-	result = cJSON_IsTrue(iscallin_item);
+	result = cJSON_IsTrue(iswuhancallin_item);
 
 	cJSON_Delete(json);
 	return result;
 }
 
-static char *callin_serialize_json(switch_callin_docker_t *callin, int callstatus)
+static char *wuhancallin_serialize_json(switch_wuhancallin_docker_t *wuhancallin, int callstatus)
 {
 	cJSON *pJson = NULL;
 	char *writebuf = NULL;
-	switch_channel_t *channel = switch_core_session_get_channel(callin->session);
-	const char *nlp_type = switch_channel_get_variable(channel, "nlp_type");
+	const char *caller_number = NULL;
+	switch_channel_t *channel = switch_core_session_get_channel(wuhancallin->session);
+	// ===================== 修复1：声明提前到函数顶部（C90要求） =====================
+	const char *x_business = NULL;
+	const char *nlp_type = NULL;
+
+	// ===================== 修复2：正确获取SIP头 X-Business =====================
+	// 正确API：从channel获取SIP头，兼容所有FreeSWITCH版本
+	x_business = switch_channel_get_variable(channel, "sip_h_X-Business");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "获取到 X-Business SIP头: %s\n",
+					x_business ? x_business : "空");
+
+	// 获取nlp_type
+	nlp_type = switch_channel_get_variable(channel, "nlp_type");
 	if (!nlp_type) {
 		nlp_type = "huoli_model";
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "nlp_type变量不存在 !! : %s \n", nlp_type);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "nlp_type变量存在 !! : %s \n", nlp_type);
+	}
+
+	caller_number = switch_channel_get_variable(channel, "caller_id_number");
+	if (!caller_number) {
+		caller_number = "000000";
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "caller_number变量不存在 !! : %s \n", caller_number);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "caller_number变量存在 !! : %s \n", caller_number);
 	}
 
 	pJson = cJSON_CreateObject();
@@ -203,8 +223,10 @@ static char *callin_serialize_json(switch_callin_docker_t *callin, int callstatu
 	}
 
 	cJSON_AddStringToObject(pJson, "flag", callstatus == 1 ? "call_start" : "call_end");
-	cJSON_AddStringToObject(pJson, "uuid", callin->uuid);
-
+	cJSON_AddStringToObject(pJson, "uuid", wuhancallin->uuid);
+	cJSON_AddStringToObject(pJson, "caller_id_number", caller_number);
+	// 把X-Business加入JSON
+	cJSON_AddStringToObject(pJson, "x_business", x_business ? x_business : "");
 	cJSON_AddStringToObject(pJson, "nlp_type", nlp_type);
 	cJSON_AddStringToObject(pJson, "asr_type", "stream");
 
@@ -222,25 +244,25 @@ static char *callin_serialize_json(switch_callin_docker_t *callin, int callstatu
 
 /**
  * 创建客户端并连接到服务器。
- * @param g_callin 指向 switch_callin_docker_t 结构体的指针。
+ * @param g_wuhancallin 指向 switch_wuhancallin_docker_t 结构体的指针。
  * @return 成功返回 0，失败返回负值。
  */
-static int create_client(switch_callin_docker_t *g_callin)
+static int create_client(switch_wuhancallin_docker_t *g_wuhancallin)
 {
 	struct sockaddr_in SockAddr = {0};
 	int ret = -1;
 
-	g_callin->cfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (g_callin->cfd < 0) {
+	g_wuhancallin->cfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (g_wuhancallin->cfd < 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create socket\n");
-		return g_callin->cfd;
+		return g_wuhancallin->cfd;
 	}
 
 	SockAddr.sin_family = AF_INET;
 	SockAddr.sin_port = htons(PORT);
 	inet_pton(AF_INET, ADDR, &SockAddr.sin_addr.s_addr);
 
-	if (0 > (ret = connect(g_callin->cfd, (struct sockaddr *)&SockAddr, sizeof(SockAddr)))) {
+	if (0 > (ret = connect(g_wuhancallin->cfd, (struct sockaddr *)&SockAddr, sizeof(SockAddr)))) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, " errorno is %s  \n", strerror(errno));
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "connect server success!!! \n");
@@ -252,25 +274,25 @@ static int create_client(switch_callin_docker_t *g_callin)
 /**
  * 关闭 CALLIN Docker 函数
  *
- * @param callin 输入的指向需要初始化的 switch_callin_docker_t 结构体的指针。
+ * @param wuhancallin 输入的指向需要初始化的 switch_wuhancallin_docker_t 结构体的指针。
  * @return 返回一个 switch_bool_t 值，表示初始化是否成功。
  */
-static switch_bool_t switch_callin_docker_close(switch_callin_docker_t *callin)
+static switch_bool_t switch_wuhancallin_docker_close(switch_wuhancallin_docker_t *wuhancallin)
 {
 	int ret = -1;
-	switch_core_session_t *session = callin->session;
-	ret = send(callin->cfd, "call_end", strlen("call_end"), 0);
+	switch_core_session_t *session = wuhancallin->session;
+	ret = send(wuhancallin->cfd, "call_end", strlen("call_end"), 0);
 	if (ret <= 0) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 						  "when close send socket data fail errno is :%s!!\n", strerror(errno));
 	}
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "when close send len is :%d!!\n", ret);
 
-	// switch_thread_join(&st, callin->thread);
+	// switch_thread_join(&st, wuhancallin->thread);
 
-	close(callin->cfd);
+	close(wuhancallin->cfd);
 
-	switch_mutex_destroy(callin->audio_mutex);
+	switch_mutex_destroy(wuhancallin->audio_mutex);
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 					  "Stopping CALLIN detection for audio stream\n");
@@ -337,42 +359,41 @@ static long getWavHeaderSize(const char *filename)
 static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_data)
 {
 	long headerSize = 0;
-	switch_callin_docker_t *callin = (switch_callin_docker_t *)user_data;
+	switch_wuhancallin_docker_t *wuhancallin = (switch_wuhancallin_docker_t *)user_data;
 	char readbuf[360] = {0};
 	int ret = -1;
 	void *dummy;
 	const char *tts_path;
-	switch_bool_t iscallin;
-	switch_channel_t *channel = switch_core_session_get_channel(callin->session);
+	switch_bool_t iswuhancallin;
+	switch_channel_t *channel = switch_core_session_get_channel(wuhancallin->session);
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "----------------RecvPthread start !!----------------\n");
 
 	while (switch_channel_ready(channel)) {
-		ret = recv(callin->cfd, readbuf, sizeof(readbuf), 0);
+		ret = recv(wuhancallin->cfd, readbuf, sizeof(readbuf), 0);
 		if (ret < 0) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvPthread: recv() fail errno: %s!!\n",
 							  strerror(errno));
-			//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-			callin->pthread_exit = TRUE;
+			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			break;
 		} else if (ret > 0) {
 			// 将log标志进行重置，每次接收数据后，发送音频流的时候就会打印一条log
-			callin->log_flag = TRUE;
+			wuhancallin->log_flag = TRUE;
 
-			// 判断当前是否是接收到了模型的callin信息，表示有人说话了
-			iscallin = get_iscallin(readbuf);
-			if (!iscallin) {
+			// 判断当前是否是接收到了模型的wuhancallin信息，表示有人说话了
+			iswuhancallin = get_iswuhancallin(readbuf);
+			if (!iswuhancallin) {
 
-				switch_mutex_lock(callin->audio_mutex);
+				switch_mutex_lock(wuhancallin->audio_mutex);
 				// 清空 audio_queue
-				while (switch_queue_size(callin->audio_queue) >= 1) {
+				while (switch_queue_size(wuhancallin->audio_queue) >= 1) {
 					// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "需要打断,正在清理audio_queue队列\n");
 
-					if (switch_queue_trypop(callin->audio_queue, &dummy) != SWITCH_STATUS_SUCCESS) {
+					if (switch_queue_trypop(wuhancallin->audio_queue, &dummy) != SWITCH_STATUS_SUCCESS) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "trypop audio_queue 失败\n");
 					}
 				}
-				switch_mutex_unlock(callin->audio_mutex);
+				switch_mutex_unlock(wuhancallin->audio_mutex);
 
 				// 解析 tts_file_path 并读取文件内容
 				tts_path = get_tts_file_path(readbuf);
@@ -384,7 +405,7 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 						size_t bytes_read;
 						char *buffer_copy = NULL;
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "开始读取音频数据\n");
-						switch_mutex_lock(callin->audio_mutex);
+						switch_mutex_lock(wuhancallin->audio_mutex);
 
 						headerSize = getWavHeaderSize(tts_path);
 						if (headerSize != -1) {
@@ -415,27 +436,27 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 							// 将数据复制到新分配的内存中
 							memcpy(buffer_copy, filebuf, sizeof(filebuf));
 
-							while (switch_queue_trypush(callin->audio_queue, buffer_copy) != SWITCH_STATUS_SUCCESS) {
-								if (callin->retry_count >= 3) {
-									callin->retry_count = 0;
+							while (switch_queue_trypush(wuhancallin->audio_queue, buffer_copy) != SWITCH_STATUS_SUCCESS) {
+								if (wuhancallin->retry_count >= 3) {
+									wuhancallin->retry_count = 0;
 									break;
 								}
-								callin->retry_count++;
+								wuhancallin->retry_count++;
 								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "push audio_queue 失败\n");
 							}
 							memset(filebuf, 0, sizeof(filebuf));
 						}
-						switch_mutex_unlock(callin->audio_mutex);
+						switch_mutex_unlock(wuhancallin->audio_mutex);
 						close(fd);
 					} else {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开文件: %s\n", tts_path);
 					}
 				}
 
-				switch_mutex_lock(callin->audio_mutex);
+				switch_mutex_lock(wuhancallin->audio_mutex);
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中上锁\n");
-				callin->iscontiue_flag = TRUE;
-				switch_mutex_unlock(callin->audio_mutex);
+				wuhancallin->iscontiue_flag = TRUE;
+				switch_mutex_unlock(wuhancallin->audio_mutex);
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中解锁\n");
 
 				// 判断 flag 是否为 "call_end"
@@ -445,15 +466,15 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 				}
 			} else {
 				// 接收到打断标志停止播放
-				switch_mutex_lock(callin->audio_mutex);
+				switch_mutex_lock(wuhancallin->audio_mutex);
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中上锁\n");
-				callin->iscontiue_flag = FALSE;
-				switch_mutex_unlock(callin->audio_mutex);
+				wuhancallin->iscontiue_flag = FALSE;
+				switch_mutex_unlock(wuhancallin->audio_mutex);
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中解锁\n");
 				// 判断 flag 是否为 "call_end"
 				if (get_flag_and_check(readbuf)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "线程接收到call_end标志\n");
-					callin->is_playback_end = TRUE;
+					wuhancallin->is_playback_end = TRUE;
 					break;
 				}
 			}
@@ -461,15 +482,14 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvPthread: socket disconnect!\n");
 			//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-			callin->pthread_exit = TRUE;
 			break;
 		}
 		// 清空操作
 		memset(readbuf, 0, sizeof(readbuf));
 
-		if (callin->audio_pthread_exit) { break; }
+		if (wuhancallin->audio_pthread_exit) { break; }
 	}
-	callin->pthread_exit = TRUE;
+	wuhancallin->pthread_exit = TRUE;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "RecvPthread: pthread is over!\n");
 	return NULL;
 }
@@ -482,11 +502,11 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
  */
 static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, void *user_data)
 {
-	switch_callin_docker_t *callin = (switch_callin_docker_t *)user_data;
-	switch_channel_t *channel = switch_core_session_get_channel(callin->session);
+	switch_wuhancallin_docker_t *wuhancallin = (switch_wuhancallin_docker_t *)user_data;
+	switch_channel_t *channel = switch_core_session_get_channel(wuhancallin->session);
 	switch_status_t status;
 	switch_frame_t *read_frame;
-	switch_core_session_t *session = callin->session;
+	switch_core_session_t *session = wuhancallin->session;
 	int ret = -1;
 	void *pop = NULL;
 	unsigned int audio_size = 0;
@@ -507,17 +527,17 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 		}
 		switch_ivr_parse_all_events(session);
 		// 线程退出不再发送音频数据
-		if (!callin->pthread_exit) {
-			ret = send(callin->cfd, read_frame->data, read_frame->datalen, 0);
+		if (!wuhancallin->pthread_exit) {
+			ret = send(wuhancallin->cfd, read_frame->data, read_frame->datalen, 0);
 			if (ret < 0) {
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 								  "when talking send socket data fail errno is :%s!!\n", strerror(errno));
 				switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			} else if (ret > 0) {
-				if (callin->log_flag == TRUE) {
+				if (wuhancallin->log_flag == TRUE) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
 									  "send len is :%d everytime!!\n", ret);
-					callin->log_flag = FALSE;
+					wuhancallin->log_flag = FALSE;
 				}
 			} else {
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "发送的音频流字节数is :%d!!\n",
@@ -525,61 +545,62 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 			}
 		}
 
-		switch_mutex_lock(callin->audio_mutex);
-		if (callin->iscontiue_flag) {
-			if (callin->log_flag == TRUE) {
+		switch_mutex_lock(wuhancallin->audio_mutex);
+		if (wuhancallin->iscontiue_flag) {
+			if (wuhancallin->log_flag == TRUE) {
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "获取音频队列的开关打开 \n");
 			}
-			audio_size = switch_queue_size(callin->audio_queue);
+			audio_size = switch_queue_size(wuhancallin->audio_queue);
 			if (audio_size >= 1) {
 				// 播放开始标志
-				callin->is_playback_end = FALSE;
-				if (callin->log_flag == TRUE) {
+				wuhancallin->is_playback_end = FALSE;
+				if (wuhancallin->log_flag == TRUE) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
 									  "音频队列的数据大于等于1 %d \n", audio_size);
-					callin->log_flag = FALSE;
+					wuhancallin->log_flag = FALSE;
 				}
-				switch_queue_pop(callin->audio_queue, &pop);
+				switch_queue_pop(wuhancallin->audio_queue, &pop);
 				// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "弹出的数据是%s\n", (char *)pop);
 
 				// 复制pop指向的内容到data
 				memcpy(read_frame->data, pop, 320);
 
-				switch_core_session_write_frame(callin->session, read_frame, SWITCH_IO_FLAG_NONE, 0);
+				switch_core_session_write_frame(wuhancallin->session, read_frame, SWITCH_IO_FLAG_NONE, 0);
 				// switch_core_media_bug_set_write_replace_frame(bug, linear_frame);
 
 				// 将pop清空
 				pop = NULL;
 			} else {
-				ret = send(callin->cfd, callin->sendbuf, strlen(callin->sendbuf), 0);
+				ret = send(wuhancallin->cfd, wuhancallin->sendbuf, strlen(wuhancallin->sendbuf), 0);
 				if (ret <= 0) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "发送play back end的时候发生错误 :%s!!\n",
 									  strerror(errno));
-					switch_mutex_unlock(callin->audio_mutex);
+					switch_mutex_unlock(wuhancallin->audio_mutex);
 					switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "play back end发送成功\n");
 					// 播放结束标志
-					callin->is_playback_end = TRUE;
+					wuhancallin->is_playback_end = TRUE;
 				}
-				callin->iscontiue_flag = FALSE;
+				wuhancallin->iscontiue_flag = FALSE;
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "音频队列大小为空 \n");
 			}
 		}
-		switch_mutex_unlock(callin->audio_mutex);
+		switch_mutex_unlock(wuhancallin->audio_mutex);
 
-		if (callin->pthread_exit && callin->is_playback_end) {
+		if (wuhancallin->pthread_exit && wuhancallin->is_playback_end) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "检测到接收线程退出，挂断电话。\n");
 			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 		}
 
 		if (switch_channel_test_flag(channel, CF_BREAK)) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, " CF_BREAK 标志位设置，挂断电话。\n");
 			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			switch_channel_clear_flag(channel, CF_BREAK);
 			break;
 		}
 	}
-	callin->audio_pthread_exit = TRUE;
+	wuhancallin->audio_pthread_exit = TRUE;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "AudioProcessPthread: pthread is over!\n");
 	return NULL;
 }
@@ -587,10 +608,10 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 /**
  * 初始化 CALLIN Docker 结构体。
  *
- * @param callin 输入的指向需要初始化的 switch_callin_docker_t 结构体的指针。
+ * @param wuhancallin 输入的指向需要初始化的 switch_wuhancallin_docker_t 结构体的指针。
  * @return 返回一个 switch_bool_t 值，表示初始化是否成功。
  */
-static switch_bool_t switch_callin_docker_init(switch_callin_docker_t *callin)
+static switch_bool_t switch_wuhancallin_docker_init(switch_wuhancallin_docker_t *wuhancallin)
 {
 
 	int ret = -1;
@@ -601,44 +622,44 @@ static switch_bool_t switch_callin_docker_init(switch_callin_docker_t *callin)
 	switch_core_session_t *session = NULL;
 	switch_channel_t *channel = NULL;
 
-	callin->cfd = -1;
-	callin->log_flag = TRUE;
-	callin->uuid = NULL;
-	callin->pthread_exit = FALSE;
-	callin->iscontiue_flag = FALSE;
-	callin->is_playback_end = FALSE;
-	callin->audio_pthread_exit = FALSE;
-	callin->retry_count = 0;
+	wuhancallin->cfd = -1;
+	wuhancallin->log_flag = TRUE;
+	wuhancallin->uuid = NULL;
+	wuhancallin->pthread_exit = FALSE;
+	wuhancallin->iscontiue_flag = FALSE;
+	wuhancallin->is_playback_end = FALSE;
+	wuhancallin->audio_pthread_exit = FALSE;
+	wuhancallin->retry_count = 0;
 
-	session = callin->session;
+	session = wuhancallin->session;
 	channel = switch_core_session_get_channel(session);
 
-	if (NULL == callin) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "callin为NULL");
+	if (NULL == wuhancallin) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wuhancallin为NULL");
 		return SWITCH_FALSE;
 	}
 
-	strcpy(callin->sendbuf, "playback_end");
-	switch_queue_create(&callin->audio_queue, MAX_AUDIO_QUEUE_LEN, switch_core_session_get_pool(callin->session));
+	strcpy(wuhancallin->sendbuf, "playback_end");
+	switch_queue_create(&wuhancallin->audio_queue, MAX_AUDIO_QUEUE_LEN, switch_core_session_get_pool(wuhancallin->session));
 
 	// 初始化
-	if ((ret = create_client(callin)) == -1) {
+	if ((ret = create_client(wuhancallin)) == -1) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "create_client fail\n");
 		return SWITCH_FALSE;
 	}
 
-	callin->uuid = switch_core_session_get_uuid(session);
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "这通电话的uuid: %s \n", callin->uuid);
+	wuhancallin->uuid = switch_core_session_get_uuid(session);
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "这通电话的uuid: %s \n", wuhancallin->uuid);
 
-	serialize_json = callin_serialize_json(callin, 1);
+	serialize_json = wuhancallin_serialize_json(wuhancallin, 1);
 	if (NULL == serialize_json) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "callin_serialize_json fail!!\n");
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "wuhancallin_serialize_json fail!!\n");
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-						  "callin_serialize_json success writebuf is %s\n", serialize_json);
+						  "wuhancallin_serialize_json success writebuf is %s\n", serialize_json);
 	}
 
-	ret = send(callin->cfd, serialize_json, strlen(serialize_json), 0);
+	ret = send(wuhancallin->cfd, serialize_json, strlen(serialize_json), 0);
 	if (ret <= 0) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 						  "when init send socket data fail errno is :%s!!\n", strerror(errno));
@@ -646,10 +667,10 @@ static switch_bool_t switch_callin_docker_init(switch_callin_docker_t *callin)
 	}
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "when init send len is :%d!!\n", ret);
 
-	ret = recv(callin->cfd, readbuf, sizeof(readbuf), 0);
+	ret = recv(wuhancallin->cfd, readbuf, sizeof(readbuf), 0);
 	if (ret <= 0) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
-						  "recv()  empty data callin no catch :%s!!\n", strerror(errno));
+						  "recv()  empty data wuhancallin no catch :%s!!\n", strerror(errno));
 		switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "recv readbuf is %s \n", readbuf);
@@ -662,91 +683,49 @@ static switch_bool_t switch_callin_docker_init(switch_callin_docker_t *callin)
 		return SWITCH_TRUE;
 	}
 
-	// 打开文件
-	// callin->test_file = open("/usr/local/freeswitch/recordings/test.raw", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	// if (callin->test_file == -1) {
-	// 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Failed to open file ");
-	// 	return SWITCH_FALSE;
-	// }
+	
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
 					  "Starting CALLIN detection for audio stream  ");
 
-	callin->pool = switch_core_session_get_pool(session);
+	wuhancallin->pool = switch_core_session_get_pool(session);
 
 	// 在初始化代码中创建互斥锁
-	switch_mutex_init(&callin->audio_mutex, SWITCH_MUTEX_NESTED, callin->pool);
+	switch_mutex_init(&wuhancallin->audio_mutex, SWITCH_MUTEX_NESTED, wuhancallin->pool);
 
-	switch_threadattr_create(&thd_attr, callin->pool);
+	switch_threadattr_create(&thd_attr, wuhancallin->pool);
 	switch_threadattr_detach_set(thd_attr, 1);
 	switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
-	switch_thread_create(&callin->thread, thd_attr, RecvPthread, callin, callin->pool);
+	switch_thread_create(&wuhancallin->thread, thd_attr, RecvPthread, wuhancallin, wuhancallin->pool);
 
-	switch_threadattr_create(&thd_farm, callin->pool);
+	switch_threadattr_create(&thd_farm, wuhancallin->pool);
 	switch_threadattr_detach_set(thd_farm, 1);
 	switch_threadattr_stacksize_set(thd_farm, SWITCH_THREAD_STACKSIZE);
-	switch_thread_create(&callin->audio_thread, thd_farm, AudioProcessPthread, callin, callin->pool);
+	switch_thread_create(&wuhancallin->audio_thread, thd_farm, AudioProcessPthread, wuhancallin, wuhancallin->pool);
 
 	return SWITCH_TRUE;
 }
-/**
- * 处理音频数据的回调函数。
- *
- * @param bug 指向 switch_media_bug_t 结构的指针，用于媒体处理的上下文。
- * @param user_data 用户数据，通常为回调函数的上下文。
- * @param type switch_abc_type_t 类型，表示回调的类型（如开始、进行中、结束等）。
- * @return 返回一个 switch_bool_t 类型的值，表示处理是否成功。
- */
-// static switch_bool_t callin_audio_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type)
-// {
-// 	switch_callin_docker_t *callin = (switch_callin_docker_t *)user_data;
-// 	switch_core_session_t *session = callin->session;
-// 	switch_frame_t *linear_frame = NULL;
-// 	int ret = -1;
-// 	void *pop = NULL;
-// 	switch_channel_t *channel = switch_core_session_get_channel(session);
-// 	char readbuf[256] = {0};
-// 	char *serialize_json = NULL;
-// 	switch_threadattr_t *thd_attr = NULL;
-// 	unsigned int audio_size = 0;
-// 	switch (type) {
-// 	case SWITCH_ABC_TYPE_INIT:
-// 		break;
-// 	case SWITCH_ABC_TYPE_CLOSE:
-// 		break;
-// 	case SWITCH_ABC_TYPE_WRITE:
-// 	case SWITCH_ABC_TYPE_WRITE_REPLACE:
-// 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "读取用户的声音成功\n");
-// 		break;
-// 	case SWITCH_ABC_TYPE_READ:
-// 	case SWITCH_ABC_TYPE_READ_REPLACE:
-// 		break;
-// 	default:
-// 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "media bug 走入默认case。\n");
-// 		break;
-// 	}
-// 	return SWITCH_TRUE;
-// }
 
-SWITCH_MODULE_LOAD_FUNCTION(mod_callin_load)
+
+SWITCH_MODULE_LOAD_FUNCTION(mod_wuhancallin_load)
 {
 	switch_application_interface_t *app_interface;
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
-	SWITCH_ADD_APP(app_interface, "callin", "Voice activity detection", "Freeswitch's CALLIN", callin_start_function,
+	SWITCH_ADD_APP(app_interface, "wuhancallin", "Voice activity detection", "Freeswitch's CALLIN", wuhancallin_start_function,
 				   "[start|stop]", SAF_NONE);
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " callin_load successful...\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " wuhancallin_load successful...\n");
 
 	return SWITCH_STATUS_SUCCESS;
 }
 
-SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_callin_shutdown) { return SWITCH_STATUS_SUCCESS; }
+SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_wuhancallin_shutdown) { return SWITCH_STATUS_SUCCESS; }
 
-SWITCH_STANDARD_APP(callin_start_function)
+SWITCH_STANDARD_APP(wuhancallin_start_function)
 {
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	switch_callin_docker_t *s_callin = NULL;
+	switch_wuhancallin_docker_t *s_wuhancallin = NULL;
 	switch_codec_implementation_t imp = {0};
 	switch_bool_t ret;
 
@@ -754,42 +733,46 @@ SWITCH_STANDARD_APP(callin_start_function)
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "CallIn input parameter %s\n", data);
 	}
 
-	if ((s_callin = (switch_callin_docker_t *)switch_channel_get_private(channel, CALLIN_PRIVATE))) {
+	if ((s_wuhancallin = (switch_wuhancallin_docker_t *)switch_channel_get_private(channel, CALLIN_PRIVATE))) {
 		if (!zstr(data) && !strcasecmp(data, "stop")) {
 			switch_channel_set_private(channel, CALLIN_PRIVATE, NULL);
-			if (s_callin->read_bug) {
-				switch_core_media_bug_remove(session, &s_callin->read_bug);
-				s_callin->read_bug = NULL;
+			if (s_wuhancallin->read_bug) {
+				switch_core_media_bug_remove(session, &s_wuhancallin->read_bug);
+				s_wuhancallin->read_bug = NULL;
 				switch_core_session_reset(session, SWITCH_TRUE, SWITCH_TRUE);
 			}
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Stopped CALLIN detection\n");
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
-							  "Cannot run callin detection 2 times on the same session!\n");
+							  "Cannot run wuhancallin detection 2 times on the same session!\n");
 		}
 		return;
 	}
 
-	s_callin = switch_core_session_alloc(session, sizeof(*s_callin));
-	switch_assert(s_callin);
-	memset(s_callin, 0, sizeof(*s_callin));
-	s_callin->session = session;
+	s_wuhancallin = switch_core_session_alloc(session, sizeof(*s_wuhancallin));
+	switch_assert(s_wuhancallin);
+	memset(s_wuhancallin, 0, sizeof(*s_wuhancallin));
+	s_wuhancallin->session = session;
 
 	switch_core_session_raw_read(session);
 	switch_core_session_get_read_impl(session, &imp);
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Read imp %u %u.\n", imp.samples_per_second,
 					  imp.number_of_channels);
 
-	ret = switch_callin_docker_init(s_callin);
+	ret = switch_wuhancallin_docker_init(s_wuhancallin);
 	if (!ret) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "程序初始化失败，结束通话\n");
 		return;
 	}
 
-	switch_channel_set_private(channel, CALLIN_PRIVATE, s_callin);
+	switch_channel_set_private(channel, CALLIN_PRIVATE, s_wuhancallin);
 
-	while (!s_callin->audio_pthread_exit) { switch_sleep(20 * 1000); }
-	ret = switch_callin_docker_close(s_callin);
+	while (!s_wuhancallin->audio_pthread_exit) {
+    // 必须加这行，让FreeSWITCH处理挂断事件
+    switch_ivr_parse_all_events(s_wuhancallin->session);
+    switch_sleep(10 * 1000);
+}
+	ret = switch_wuhancallin_docker_close(s_wuhancallin);
 	if (!ret) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "程序初始化失败，结束通话\n");
 		return;
