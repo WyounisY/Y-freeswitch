@@ -251,11 +251,18 @@ static int create_client(switch_wuhancallin_docker_t *g_wuhancallin)
 {
 	struct sockaddr_in SockAddr = {0};
 	int ret = -1;
+	struct timeval tv;
 
 	g_wuhancallin->cfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (g_wuhancallin->cfd < 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create socket\n");
 		return g_wuhancallin->cfd;
+	}
+
+	tv.tv_sec = 65;
+	tv.tv_usec = 0;
+	if (setsockopt(g_wuhancallin->cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "setsockopt SO_RCVTIMEO failed\n");
 	}
 
 	SockAddr.sin_family = AF_INET;
@@ -281,6 +288,10 @@ static switch_bool_t switch_wuhancallin_docker_close(switch_wuhancallin_docker_t
 {
 	int ret = -1;
 	switch_core_session_t *session = wuhancallin->session;
+
+	wuhancallin->pthread_exit = TRUE;
+	wuhancallin->audio_pthread_exit = TRUE;
+
 	ret = send(wuhancallin->cfd, "call_end", strlen("call_end"), 0);
 	if (ret <= 0) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
@@ -288,13 +299,10 @@ static switch_bool_t switch_wuhancallin_docker_close(switch_wuhancallin_docker_t
 	}
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "when close send len is :%d!!\n", ret);
 
-	// switch_thread_join(&st, wuhancallin->thread);
-
+	shutdown(wuhancallin->cfd, SHUT_RDWR);
 	close(wuhancallin->cfd);
 
-	switch_mutex_destroy(wuhancallin->audio_mutex);
-
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
 					  "Stopping CALLIN detection for audio stream\n");
 	return SWITCH_TRUE;
 }
@@ -489,6 +497,15 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 
 		if (wuhancallin->audio_pthread_exit) { break; }
 	}
+
+	dummy = NULL;
+	while (switch_queue_size(wuhancallin->audio_queue) > 0) {
+		if (switch_queue_trypop(wuhancallin->audio_queue, &dummy) == SWITCH_STATUS_SUCCESS && dummy != NULL) {
+			free(dummy);
+			dummy = NULL;
+		}
+	}
+
 	wuhancallin->pthread_exit = TRUE;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "RecvPthread: pthread is over!\n");
 	return NULL;
@@ -566,9 +583,7 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 				memcpy(read_frame->data, pop, 320);
 
 				switch_core_session_write_frame(wuhancallin->session, read_frame, SWITCH_IO_FLAG_NONE, 0);
-				// switch_core_media_bug_set_write_replace_frame(bug, linear_frame);
-
-				// 将pop清空
+				free(pop);
 				pop = NULL;
 			} else {
 				ret = send(wuhancallin->cfd, wuhancallin->sendbuf, strlen(wuhancallin->sendbuf), 0);
