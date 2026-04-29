@@ -395,7 +395,7 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 				switch_mutex_lock(wuhancallin->audio_mutex);
 				// 清空 audio_queue
 				while (switch_queue_size(wuhancallin->audio_queue) >= 1) {
-					// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "需要打断,正在清理audio_queue队列\n");
+					// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "需要打断,正在清理audio_queue队列\n");
 
 					if (switch_queue_trypop(wuhancallin->audio_queue, &dummy) != SWITCH_STATUS_SUCCESS) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "trypop audio_queue 失败\n");
@@ -405,23 +405,23 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 
 				// 解析 tts_file_path 并读取文件内容
 				tts_path = get_tts_file_path(readbuf);
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "读取音频数据的文件是%s\n", tts_path);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "读取音频数据的文件是%s\n", tts_path);
 				if (tts_path && strlen(tts_path) > 0) {
 					int fd = open(tts_path, O_RDONLY);
 					if (fd) {
 						char filebuf[320];
 						size_t bytes_read;
 						char *buffer_copy = NULL;
-						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "开始读取音频数据\n");
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "开始读取音频数据\n");
 						switch_mutex_lock(wuhancallin->audio_mutex);
 
 						headerSize = getWavHeaderSize(tts_path);
 						if (headerSize != -1) {
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WAV 文件头部大小为：%ld 字节\n",
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "WAV 文件头部大小为：%ld 字节\n",
 											  headerSize);
 							headerSize = headerSize +ADD_SIZE;
 						} else {
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
 											  "文件不是有效的 WAV 文件或读取失败。\n");
 						}
 
@@ -462,10 +462,10 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 				}
 
 				switch_mutex_lock(wuhancallin->audio_mutex);
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中上锁\n");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "iscontiue_flag 在线程中上锁\n");
 				wuhancallin->iscontiue_flag = TRUE;
 				switch_mutex_unlock(wuhancallin->audio_mutex);
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中解锁\n");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "iscontiue_flag 在线程中解锁\n");
 
 				// 判断 flag 是否为 "call_end"
 				if (get_flag_and_check(readbuf)) {
@@ -475,10 +475,10 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 			} else {
 				// 接收到打断标志停止播放
 				switch_mutex_lock(wuhancallin->audio_mutex);
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中上锁\n");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "iscontiue_flag 在线程中上锁\n");
 				wuhancallin->iscontiue_flag = FALSE;
 				switch_mutex_unlock(wuhancallin->audio_mutex);
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "iscontiue_flag 在线程中解锁\n");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "iscontiue_flag 在线程中解锁\n");
 				// 判断 flag 是否为 "call_end"
 				if (get_flag_and_check(readbuf)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "线程接收到call_end标志\n");
@@ -730,7 +730,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_wuhancallin_load)
 	SWITCH_ADD_APP(app_interface, "wuhancallin", "Voice activity detection", "Freeswitch's CALLIN", wuhancallin_start_function,
 				   "[start|stop]", SAF_NONE);
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, " wuhancallin_load successful...\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, " wuhancallin_load successful...\n");
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -745,7 +745,7 @@ SWITCH_STANDARD_APP(wuhancallin_start_function)
 	switch_bool_t ret;
 
 	if (!zstr(data)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "CallIn input parameter %s\n", data);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "CallIn input parameter %s\n", data);
 	}
 
 	if ((s_wuhancallin = (switch_wuhancallin_docker_t *)switch_channel_get_private(channel, CALLIN_PRIVATE))) {
@@ -756,7 +756,7 @@ SWITCH_STANDARD_APP(wuhancallin_start_function)
 				s_wuhancallin->read_bug = NULL;
 				switch_core_session_reset(session, SWITCH_TRUE, SWITCH_TRUE);
 			}
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Stopped CALLIN detection\n");
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Stopped CALLIN detection\n");
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
 							  "Cannot run wuhancallin detection 2 times on the same session!\n");
