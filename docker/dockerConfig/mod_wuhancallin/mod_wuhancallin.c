@@ -374,7 +374,7 @@ static void *SWITCH_THREAD_FUNC RecvPthread(switch_thread_t *thread, void *user_
 		if (ret < 0) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "RecvPthread: recv() fail errno: %s!!\n",
 							  strerror(errno));
-			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+			//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			break;
 		} else if (ret > 0) {
 			// 将log标志进行重置，每次接收数据后，发送音频流的时候就会打印一条log
@@ -532,7 +532,7 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 			if (ret < 0) {
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 								  "when talking send socket data fail errno is :%s!!\n", strerror(errno));
-				switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+				//(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			} else if (ret > 0) {
 				if (wuhancallin->log_flag == TRUE) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
@@ -576,7 +576,7 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "发送play back end的时候发生错误 :%s!!\n",
 									  strerror(errno));
 					switch_mutex_unlock(wuhancallin->audio_mutex);
-					switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+					//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "play back end发送成功\n");
 					// 播放结束标志
@@ -590,12 +590,12 @@ static void *SWITCH_THREAD_FUNC AudioProcessPthread(switch_thread_t *thread, voi
 
 		if (wuhancallin->pthread_exit && wuhancallin->is_playback_end) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "检测到接收线程退出，挂断电话。\n");
-			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+			//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 		}
 
 		if (switch_channel_test_flag(channel, CF_BREAK)) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, " CF_BREAK 标志位设置，挂断电话。\n");
-			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+			//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 			switch_channel_clear_flag(channel, CF_BREAK);
 			break;
 		}
@@ -663,7 +663,7 @@ static switch_bool_t switch_wuhancallin_docker_init(switch_wuhancallin_docker_t 
 	if (ret <= 0) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 						  "when init send socket data fail errno is :%s!!\n", strerror(errno));
-		switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+		//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 	}
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "when init send len is :%d!!\n", ret);
 
@@ -671,7 +671,7 @@ static switch_bool_t switch_wuhancallin_docker_init(switch_wuhancallin_docker_t 
 	if (ret <= 0) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
 						  "recv()  empty data wuhancallin no catch :%s!!\n", strerror(errno));
-		switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+		//switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "recv readbuf is %s \n", readbuf);
 	}
